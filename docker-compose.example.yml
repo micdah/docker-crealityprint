@@ -2,9 +2,8 @@
 # Open https://<host>:3001 (HTTPS is required; plain HTTP shows a black page).
 services:
   crealityprint:
-    # Replace <owner> with the GitHub owner publishing the image. Pin a version tag
-    # (e.g. :7.3.2) instead of :latest if you want to control upgrades yourself.
-    image: ghcr.io/<owner>/crealityprint:latest
+    # Pin a version tag (e.g. :7.3.2) instead of :latest if you want to control upgrades yourself.
+    image: ghcr.io/micdah/docker-crealityprint:latest
     container_name: crealityprint
     environment:
       - PUID=1000                         # your user's id (`id -u`)
