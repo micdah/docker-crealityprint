@@ -37,7 +37,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: actionlint (workflows)
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.4 -color
@@ -74,7 +74,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tags: ${{ steps.meta.outputs.tags }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Read the Creality Print version
         id: version
@@ -135,7 +135,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: actions/download-artifact@v4
         with:
@@ -158,7 +158,7 @@ jobs:
         spec: [seed, persistence, transfer, watcher, clipboard]
     name: e2e (${{ matrix.spec }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Free disk space
         run: |
@@ -228,7 +228,7 @@ jobs:
       COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - uses: actions/download-artifact@v4
         with:
