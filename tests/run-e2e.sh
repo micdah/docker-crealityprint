@@ -100,6 +100,7 @@ run_playwright() {
     --group-add "$docker_socket_gid" \
     --env HOME=/tmp \
     --env CI \
+    --env E2E_REPORT_NAME \
     --env E2E_IMAGE="$image" \
     --env E2E_RUN_ID="$run_id" \
     --env E2E_WORK_DIR="$work_dir" \
@@ -127,6 +128,8 @@ main() {
   run_id="$(date +%s)-$$"
   work_dir="${E2E_WORK_ROOT:-${repo_dir}/.e2e-work}/${run_id}"
   mkdir -p "$work_dir" "$artifacts_dir"
+  # Screenshots are written by the specs themselves; drop the previous run's files.
+  rm -rf "${artifacts_dir}/screenshots"
   trap cleanup EXIT
 
   build_runner_image

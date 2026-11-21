@@ -4,7 +4,8 @@
 #
 #   lint ─────────────────────────────┐
 #   build ──┬── smoke ────────────────┼── ci-ok ── publish (master / schedule / manual only)
-#           └── e2e (one job per spec)┘
+#           └── e2e (one job per spec)┤
+#                                     └── report (merged HTML report with screenshots → GitHub Pages)
 #
 # The image is built once and passed to the test jobs as an artifact, and publish pushes that
 # exact tested image. ci-ok is the single status check to require in branch protection.
@@ -177,6 +178,7 @@ jobs:
         env:
           CI: "true"
           E2E_ARTIFACTS_DIR: ${{ runner.temp }}/e2e-artifacts
+          E2E_REPORT_NAME: ${{ matrix.spec }}
         run: tests/run-e2e.sh "$LOCAL_IMAGE" --spec "${{ matrix.spec }}" --workers 1
 
       - name: Job summary
@@ -188,8 +190,144 @@ jobs:
         if: always()
         with:
           name: e2e-${{ matrix.spec }}
-          path: ${{ runner.temp }}/e2e-artifacts
+          # The blob report goes in its own artifact below; don't store it twice.
+          path: |
+            ${{ runner.temp }}/e2e-artifacts
+            !${{ runner.temp }}/e2e-artifacts/blob
           retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: blob-${{ matrix.spec }}
+          path: ${{ runner.temp }}/e2e-artifacts/blob
+          retention-days: 1
+          if-no-files-found: ignore
+
+  # Merge the per-spec reports into one HTML report (a screenshot of each visible check inline)
+  # and publish it to GitHub Pages: pr-<number>/ for PRs, <branch>/ otherwise. The PR gets a
+  # sticky comment that always names the commit it describes, including when no report could be
+  # made (e.g. the build failed). Skipped for fork PRs (their token can't push) and for the
+  # weekly schedule (nothing new to review). Not part of ci-ok: publishing shouldn't block.
+  report:
+    needs: [build, e2e]
+    if: >-
+      always()
+      && github.event_name != 'schedule'
+      && needs.e2e.result != 'cancelled'
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: gh-pages
+      cancel-in-progress: false
+    env:
+      COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: blob-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/blobs
+
+      # No blobs means the e2e jobs never ran (build failed) or died before reporting.
+      - name: Check for test results
+        id: blobs
+        run: |
+          if compgen -G "${{ runner.temp }}/blobs/*.zip" > /dev/null; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.blobs.outputs.found == 'true'
+        with:
+          node-version: 22
+
+      - name: Install the Playwright reporter
+        if: steps.blobs.outputs.found == 'true'
+        working-directory: tests/e2e
+        run: npm ci --no-audit --no-fund
+
+      - name: Merge the reports
+        if: steps.blobs.outputs.found == 'true'
+        working-directory: tests/e2e
+        env:
+          E2E_MERGED_REPORT_DIR: ${{ runner.temp }}/site
+        run: |
+          npx playwright merge-reports --config merge.config.js "${{ runner.temp }}/blobs"
+          test -f "${{ runner.temp }}/site/index.html"
+
+      - name: Work out where the report goes
+        id: target
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            directory="pr-${PR_NUMBER}"
+          else
+            directory="${GITHUB_REF_NAME//\//-}"
+          fi
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "directory=${directory}" >> "$GITHUB_OUTPUT"
+          echo "url=https://${owner}.github.io/${REPO_NAME}/${directory}/" >> "$GITHUB_OUTPUT"
+
+      # Replaces only this report's folder (keep_files off cleans destination_dir); other
+      # PRs' and branches' folders are left alone. Pinned: this action gets a write token.
+      - name: Publish to GitHub Pages
+        if: steps.blobs.outputs.found == 'true'
+        uses: peaceiris/actions-gh-pages@84c30a85c19949d7eee79c4ff27748b70285e453 # v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ${{ runner.temp }}/site
+          destination_dir: ${{ steps.target.outputs.directory }}
+          commit_message: "e2e report for ${{ steps.target.outputs.directory }} (${{ github.sha }})"
+
+      - name: Job summary
+        if: steps.blobs.outputs.found == 'true'
+        env:
+          REPORT_URL: ${{ steps.target.outputs.url }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          {
+            echo "### e2e report with screenshots"
+            echo
+            echo "Result: **${E2E_RESULT}** for ${COMMIT_SHA}. Report: ${REPORT_URL}"
+            echo "(GitHub Pages may need a minute to deploy.)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on the PR (report published)
+        if: github.event_name == 'pull_request' && steps.blobs.outputs.found == 'true'
+        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2
+        with:
+          header: e2e-report
+          message: |
+            ### e2e report with screenshots
+
+            ${{ needs.e2e.result == 'success' && '✅ All e2e specs passed' || '❌ Some e2e specs failed' }} for commit ${{ env.COMMIT_SHA }}.
+            **[Open the report](${{ steps.target.outputs.url }})**: click a test to see a screenshot of each visible check.
+
+            [Workflow run](${{ env.RUN_URL }}). GitHub Pages may need a minute to deploy.
+
+      - name: Comment on the PR (no report)
+        if: >-
+          always() && github.event_name == 'pull_request'
+          && (steps.blobs.outputs.found != 'true' || failure())
+        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2
+        with:
+          header: e2e-report
+          message: |
+            ### e2e report with screenshots
+
+            ⚠️ No e2e report could be published for commit ${{ env.COMMIT_SHA }} (build: ${{ needs.build.result }}, e2e: ${{ needs.e2e.result }}).
+            See the [workflow run](${{ env.RUN_URL }}) for details.
 
   ci-ok:
     needs: [lint, smoke, e2e]

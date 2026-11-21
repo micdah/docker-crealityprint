@@ -2,6 +2,7 @@
 const { test, expect } = require('@playwright/test');
 const { AppContainer, poll } = require('./lib/app');
 const { openSession } = require('./lib/selkies');
+const { snap, note } = require('./lib/evidence');
 
 test.describe('gpu', () => {
   test.skip(process.env.E2E_HAS_DRI !== 'true', 'no /dev/dri on this host');
@@ -26,7 +27,7 @@ test.describe('gpu', () => {
 
     // The app is an X11 client on Xwayland :0; what glxinfo reports there is what it gets.
     const glxinfo = await app.exec('glxinfo -B', { env: { DISPLAY: ':0' } });
-    await testInfo.attach('glxinfo', { body: glxinfo, contentType: 'text/plain' });
+    await note(testInfo, 'glxinfo -B on the app display', glxinfo);
     const renderer = glxinfo.split('\n').find((line) => line.includes('OpenGL renderer string')) || '';
     expect(renderer).not.toContain('llvmpipe');
 
@@ -35,5 +36,6 @@ test.describe('gpu', () => {
     await poll('a hardware (VA-API/NVENC) encoder', async () => /vaapi|nvenc/i.test(await app.logs()), {
       timeoutMs: 60000,
     });
+    await snap(page, testInfo, `GPU: 3D view rendered by "${renderer.replace('OpenGL renderer string:', '').trim()}", stream hardware encoded`);
   });
 });

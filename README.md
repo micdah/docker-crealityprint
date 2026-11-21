@@ -130,14 +130,20 @@ tests/run-e2e.sh crealityprint:dev --spec watcher   # one spec
 tests/run-e2e.sh crealityprint:dev --app-cpus 4 --workers 1   # mimic a CI runner
 ```
 
-The e2e specs start their own containers via the Docker socket and never touch a printer. Reports and screenshots go to `e2e-artifacts/`.
+The e2e specs start their own containers via the Docker socket and never touch a printer. Each visible check takes a named screenshot of what it verified, e.g. "After uploading e2e watch.stl: the 40 mm cube is on the plate". They are shown inline in the HTML report (`e2e-artifacts/report/index.html`) and saved as numbered files in `e2e-artifacts/screenshots/<spec>/`.
 
 **CI** (`.github/workflows/build.yml`) runs on every PR:
 - lint and one image build, in parallel;
 - then the smoke test and one e2e job per spec, in parallel;
 - on `master`, it publishes the exact tested image to GHCR.
 
-Each run's job summary lists the test results, and the artifacts hold the report, screenshots and logs, so PRs can be reviewed without checking them out. Make **`ci-ok`** the required status check in the `master` branch protection.
+PRs can be reviewed without checking them out:
+- Each run's job summary lists the test results.
+- A `report` job merges the per-spec reports into one HTML report with every screenshot inline. It publishes the report to GitHub Pages (`https://<owner>.github.io/<repo>/pr-<number>/`) and links it in a sticky PR comment that is updated on every run and names the commit it describes. Pushes to `master` publish to `…/master/`.
+- A PR's report is removed when it closes. A weekly cleanup also prunes reports of closed PRs and squashes the `gh-pages` history to one commit, so it doesn't grow. Fork PRs don't get a published report.
+- The artifacts also hold the raw report, screenshots and logs.
+
+One-time setup: after the first run has created the `gh-pages` branch, enable Pages under Settings → Pages with source "Deploy from a branch" and branch `gh-pages` / root. Make **`ci-ok`** the required status check in the `master` branch protection.
 
 After the first publish, the GHCR package is private: make it public in the package settings if others should pull it.
 

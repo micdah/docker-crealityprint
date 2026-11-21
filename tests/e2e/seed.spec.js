@@ -2,6 +2,7 @@
 const { test, expect } = require('@playwright/test');
 const { AppContainer } = require('./lib/app');
 const { openSession } = require('./lib/selkies');
+const { snap } = require('./lib/evidence');
 
 test.describe('first-run seed', () => {
   let app;
@@ -23,6 +24,7 @@ test.describe('first-run seed', () => {
     expect(conf.models[0].model).toBe('Creality K1C');
     expect(conf.presets.machine).toBe('Creality K1C 0.4 nozzle');
     expect(conf.presets.process).toBe('0.20mm Standard @Creality K1C 0.4 nozzle');
+    expect(conf.presets.filaments[0]).toBe('Hyper PLA @Creality K1C 0.4 nozzle');
     expect(conf.firstguide.finish).toBeTruthy();
     expect(conf.recent.last_opened_folder).toBe('/config/Desktop');
     expect(conf.app.last_export_path).toBe('/config/Desktop');
@@ -31,7 +33,7 @@ test.describe('first-run seed', () => {
     expect(privacy.list[0].check).toBe(false);
 
     await openSession(page, app.httpsUrl);
-    await testInfo.attach('seeded-main-window', { body: await page.screenshot(), contentType: 'image/png' });
+    await snap(page, testInfo, 'Seeded first start: Prepare view with Creality K1C, Hyper PLA, 0.20mm Standard; no wizard');
   });
 
   test('without CP_PRINTER only the folders and telemetry opt-out are seeded', async ({ page }, testInfo) => {
@@ -49,10 +51,10 @@ test.describe('first-run seed', () => {
     expect(privacy.list[0].check).toBe(false);
 
     await openSession(page, app.httpsUrl);
-    await testInfo.attach('first-run-wizard', { body: await page.screenshot(), contentType: 'image/png' });
+    await snap(page, testInfo, 'Unseeded first start, 20 s after launch (no printer configured; expected: the setup wizard)');
   });
 
-  test('an unknown CP_PRINTER falls back to the wizard instead of an empty printer', async () => {
+  test('an unknown CP_PRINTER falls back to the wizard instead of an empty printer', async ({ page }, testInfo) => {
     app = await AppContainer.start({ label: 'seed-unknown', env: { CP_PRINTER: 'No Such Printer' } });
     await app.waitForInit();
 
@@ -60,5 +62,11 @@ test.describe('first-run seed', () => {
     const conf = await app.readAppFile('Creality.conf');
     expect(conf.models).toBeUndefined();
     expect(conf.recent.last_opened_folder).toBe('/config/Desktop');
+
+    await app.waitForAppProcess();
+    await openSession(page, app.httpsUrl);
+    await snap(page, testInfo, 'Unknown CP_PRINTER, 15 s after launch (no printer seeded; expected: the setup wizard)', {
+      settleMs: 15000,
+    });
   });
 });

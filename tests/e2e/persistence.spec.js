@@ -2,8 +2,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { test, expect } = require('@playwright/test');
-const { AppContainer, poll } = require('./lib/app');
-const { uploadViaApi } = require('./lib/selkies');
+const { AppContainer, poll, writeCubeStl } = require('./lib/app');
+const { openSession, uploadViaApi } = require('./lib/selkies');
+const { snap } = require('./lib/evidence');
 
 const DATA_DIR_GLOB = '.config/Creality/Creality Print';
 
@@ -24,7 +25,7 @@ test.describe.serial('persistence', () => {
     }
   });
 
-  test('settings survive docker rm and re-create', async ({}, testInfo) => {
+  test('settings survive docker rm and re-create', async ({ page }, testInfo) => {
     app = await AppContainer.start({ label: 'persist-a', env: { CP_PRINTER: 'Creality K1C' } });
     configDir = app.configDir;
     await app.waitForInit();
@@ -42,6 +43,8 @@ test.describe.serial('persistence', () => {
     await app.waitForInit();
     await app.waitForMainWindow();
     expect(await app.logs()).not.toContain('first run: seeding');
+    await openSession(page, app.httpsUrl);
+    await snap(page, testInfo, 'Re-created container on the same /config: Creality K1C still selected, no wizard');
     await app.stop();
 
     const reloaded = JSON.parse(fs.readFileSync(confFile, 'utf8'));
@@ -50,7 +53,7 @@ test.describe.serial('persistence', () => {
     expect(reloaded.firstguide.finish).toBeTruthy();
   });
 
-  test('a PUID/PGID change on an existing /config still starts the desktop and app', async () => {
+  test('a PUID/PGID change on an existing /config still starts the desktop and app', async ({ page }, testInfo) => {
     test.skip(!configDir, 'needs the config from the previous test');
     // The watcher also proves the app still has its session D-Bus (state in /config/.dbus).
     app = await AppContainer.start({
@@ -68,10 +71,16 @@ test.describe.serial('persistence', () => {
 
     await app.waitForMainWindow();
     await poll('the app still running', async () => (await app.appProcessCount()) === 1, { timeoutMs: 20000 });
+    const conf = await app.readAppFile('Creality.conf');
+    expect(conf.models[0].model).toBe('Creality K1C');
+    expect(String(conf.app.zoom_to_mouse)).toBe('false');
+    await openSession(page, app.httpsUrl);
+    await snap(page, testInfo, 'After a PUID/PGID change: desktop and app start, Creality K1C and preferences kept');
 
-    const cubeStl = 'solid c\n facet normal 0 0 0\n  outer loop\n   vertex 0 0 0\n   vertex 9 9 0\n   vertex 9 0 0\n  endloop\n endfacet\nendsolid c\n';
-    expect(await uploadViaApi(app.httpsUrl, 'after-puid.stl', cubeStl)).toBe(200);
+    const cubeFile = writeCubeStl(testInfo.outputPath(), 'after-puid.stl');
+    expect(await uploadViaApi(app.httpsUrl, 'after-puid.stl', fs.readFileSync(cubeFile))).toBe(200);
     await app.waitForAppLog('load_files start filename /config/Desktop/after-puid.stl');
     expect(await app.appProcessCount()).toBe(1);
+    await snap(page, testInfo, 'After a PUID/PGID change: an uploaded cube is added to the plate (session D-Bus works)');
   });
 });

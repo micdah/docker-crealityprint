@@ -19,6 +19,11 @@ module.exports = defineConfig({
     ['list'],
     ['html', { outputFolder: `${artifactsDir}/report`, open: 'never' }],
     ['json', { outputFile: `${artifactsDir}/results.json` }],
+    // In CI every matrix job writes a blob report; a later job merges them into one HTML
+    // report (screenshots inline) and publishes it for the PR.
+    ...(isCI
+      ? [['blob', { outputDir: `${artifactsDir}/blob`, fileName: `report-${process.env.E2E_REPORT_NAME || 'all'}.zip` }]]
+      : []),
   ],
   use: {
     // Small stream: without a GPU the CPU cost grows with the number of streamed pixels.

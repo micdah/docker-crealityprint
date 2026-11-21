@@ -28,12 +28,18 @@ async function isInViewport(page, locator) {
   return Boolean(box) && box.x >= 0 && box.x + box.width <= viewport.width;
 }
 
+// Open the Selkies sidebar (its first section header comes into view).
+async function openSidebar(page) {
+  const firstHeader = page.locator('button.sidebar-section-header').first();
+  if (!(await isInViewport(page, firstHeader))) {
+    await page.locator('.toggle-handle').click();
+    await expectEventually(() => isInViewport(page, firstHeader), 'the sidebar to open');
+  }
+}
+
 async function openFilesSection(page) {
   const filesHeader = page.locator('button.sidebar-section-header[title="Files"]');
-  if (!(await isInViewport(page, filesHeader))) {
-    await page.locator('.toggle-handle').click();
-    await expectEventually(() => isInViewport(page, filesHeader), 'the sidebar to open');
-  }
+  await openSidebar(page);
   if ((await filesHeader.getAttribute('aria-expanded')) !== 'true') {
     await filesHeader.click();
   }
@@ -52,7 +58,8 @@ async function uploadViaSidebar(page, filePath) {
 }
 
 // Download one file through the sidebar's "Download Files" dialog; returns the Download.
-async function downloadViaFilesDialog(page, fileName) {
+// onDialogOpen (optional) runs once the file is listed, e.g. to take a screenshot.
+async function downloadViaFilesDialog(page, fileName, onDialogOpen = async () => {}) {
   await openFilesSection(page);
   await page.locator('button[title="Download Files"]').click();
   // Rows are plain divs: take the closest ancestor of the file name that holds a button.
@@ -60,6 +67,7 @@ async function downloadViaFilesDialog(page, fileName) {
   const nameCell = dialog.getByText(fileName, { exact: true });
   await nameCell.waitFor({ state: 'visible', timeout: 30000 });
   const row = nameCell.locator('xpath=ancestor::*[descendant::button][1]');
+  await onDialogOpen();
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     row.getByRole('button', { name: /download/i }).click(),
@@ -86,4 +94,4 @@ async function uploadViaApi(baseUrl, fileName, body, extraHeaders = {}) {
   return status;
 }
 
-module.exports = { uploadViaApi, openSession, openFilesSection, uploadViaSidebar, downloadViaFilesDialog, focusStream };
+module.exports = { uploadViaApi, openSidebar, openSession, openFilesSection, uploadViaSidebar, downloadViaFilesDialog, focusStream };
