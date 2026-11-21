@@ -11,7 +11,7 @@ A Docker image that runs [Creality Print](https://github.com/CrealityOfficial/Cr
 # docker-compose.yml (see docker-compose.example.yml for every option)
 services:
   crealityprint:
-    image: ghcr.io/<owner>/crealityprint:latest
+    image: ghcr.io/micdah/docker-crealityprint:latest
     environment:
       - PUID=1000
       - PGID=1000
