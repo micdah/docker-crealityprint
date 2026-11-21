@@ -32,9 +32,11 @@ function nextScreenshotPath(testInfo, label) {
 // Screenshot the page after letting the stream catch up, and record it under `label`.
 async function snap(page, testInfo, label, { settleMs = 2000 } = {}) {
   await page.waitForTimeout(settleMs);
-  const png = await page.screenshot();
-  await testInfo.attach(label, { body: png, contentType: 'image/png' });
-  fs.writeFileSync(nextScreenshotPath(testInfo, label), png);
+  const screenshotPath = nextScreenshotPath(testInfo, label);
+  await page.screenshot({ path: screenshotPath });
+  // Attach by path: the report then names the stored file after this .png, not after the
+  // label (a label like "0.20mm Standard" would otherwise end up as the file extension).
+  await testInfo.attach(label, { path: screenshotPath, contentType: 'image/png' });
 }
 
 // Record non-visual evidence (e.g. clipboard contents, glxinfo) next to the screenshots.
