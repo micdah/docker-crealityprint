@@ -1,0 +1,68 @@
+#!/bin/bash
+# Ask the running Creality Print to load files, the way a second app instance would,
+# without starting a second instance.
+#
+# usage: crealityprint-open <file>...      exit 1 when no app is listening on the session bus
+#
+# Why: the app always listens on the session D-Bus for "AnotherInstance" (InstanceCheck.cpp),
+# whatever its single_instance setting is. Files sent this way are added to the current plate
+# and unsaved work is kept (docs/research/12, section 1.5).
+
+set -uo pipefail
+
+# The app runs on Xwayland :0; the session bus is found through X11 autolaunch on that
+# display. The container env says DISPLAY=:1 (X11 mode default), which would fail.
+export DISPLAY=:0
+
+readonly bus_name_prefix="io.github.crealityofficial.CrealityPrint.InstanceCheck.Object"
+readonly app_binary="/opt/crealityprint/bin/CrealityPrint"
+
+find_bus_name() {
+  dbus-send --session --print-reply --dest=org.freedesktop.DBus / org.freedesktop.DBus.ListNames \
+    2> /dev/null \
+    | grep -o "${bus_name_prefix}[0-9]*" \
+    | head -1
+}
+
+# Quote one argument like the app's escape_strings_cstyle(): quote when it holds ; whitespace
+# " or \, and escape \ and " inside the quotes.
+quote_argument() {
+  local argument="$1"
+  if [[ "$argument" =~ [\;[:space:]\"\\] ]]; then
+    argument="${argument//\\/\\\\}"
+    argument="${argument//\"/\\\"}"
+    printf '"%s"' "$argument"
+  else
+    printf '%s' "$argument"
+  fi
+}
+
+main() {
+  if [ "$#" -eq 0 ]; then
+    echo "usage: crealityprint-open <file>..." >&2
+    exit 2
+  fi
+
+  local bus_name
+  bus_name="$(find_bus_name)"
+  if [ -z "$bus_name" ]; then
+    echo "Creality Print is not listening on the session bus" >&2
+    exit 1
+  fi
+  local instance_hash="${bus_name#"$bus_name_prefix"}"
+
+  # Arguments are joined with ";" (not spaces); the app skips the first one (the executable).
+  local message="$app_binary"
+  local file_path
+  for file_path in "$@"; do
+    message+=";$(quote_argument "$file_path")"
+  done
+
+  dbus-send --session --type=method_call \
+    --dest="$bus_name" \
+    "/io/github/crealityofficial/CrealityPrint/InstanceCheck/Object${instance_hash}" \
+    "${bus_name}.AnotherInstance" \
+    "string:${message}"
+}
+
+main "$@"

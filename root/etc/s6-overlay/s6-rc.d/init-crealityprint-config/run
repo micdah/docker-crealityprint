@@ -1,0 +1,119 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# Prepare /config for Creality Print before the desktop starts.
+# Runs as root after the base image's init-config and before init-config-end.
+
+readonly config_home="/config"
+readonly app_config_root="${config_home}/.config/Creality/Creality Print"
+readonly defaults_dir="/defaults/crealityprint"
+# The Selkies upload folder; the app's Import/Export dialogs are pointed at it on first run.
+readonly upload_dir="${FILE_MANAGER_PATH:-${config_home}/Desktop}"
+
+log() {
+  echo "[crealityprint-init] $*"
+}
+
+# Desktop and app state the desktop user must own. Re-owned recursively when needed.
+readonly owned_state_dirs=(
+  "${config_home}/.config"
+  "${config_home}/.local"
+  "${config_home}/.cache"
+  "${config_home}/.Creality"
+  # X11 D-Bus autolaunch state (mode 0700). If abc can't read it, the app gets no session
+  # bus and the upload watcher can't hand files to it.
+  "${config_home}/.dbus"
+)
+
+# Print the first path (two levels deep) in the state dirs that abc doesn't own, if any.
+# Two levels, because the base image re-owns the top-level dirs (e.g. /config/.config)
+# but not what is inside them.
+first_foreign_owned_path() {
+  local expected_uid="$1"
+  local existing_dirs=()
+  local state_dir
+  for state_dir in "${owned_state_dirs[@]}"; do
+    if [ -d "$state_dir" ]; then
+      existing_dirs+=("$state_dir")
+    fi
+  done
+  if [ "${#existing_dirs[@]}" -eq 0 ]; then
+    return
+  fi
+  find "${existing_dirs[@]}" -maxdepth 2 ! -uid "$expected_uid" -print -quit 2> /dev/null
+}
+
+# Why: the base image only fixes ownership of the top-level dirs. After a PUID/PGID change
+# the files inside still belong to the old user and the desktop never starts (black screen;
+# docs/research/05, test T3). The upload folder is only re-owned at its top level, so a NAS
+# share mounted below it is never chowned.
+repair_ownership() {
+  local expected_uid foreign_path
+  expected_uid="$(id -u abc)"
+  foreign_path="$(first_foreign_owned_path "$expected_uid")"
+  if [ -z "$foreign_path" ]; then
+    return
+  fi
+
+  log "${foreign_path} is not owned by uid ${expected_uid}; re-owning the desktop and app state in ${config_home}"
+  local state_dir
+  for state_dir in "${owned_state_dirs[@]}"; do
+    if [ -d "$state_dir" ]; then
+      lsiown -R abc:abc "$state_dir"
+    fi
+  done
+  if [ -d "$upload_dir" ]; then
+    lsiown abc:abc "$upload_dir"
+  fi
+}
+
+# Why: an app data dir that already exists (from any version) means the user has settings,
+# or the app has its own migration to run (7.0 -> 7.3). Seeding then would block that.
+app_data_exists() {
+  local existing_dir
+  for existing_dir in "$app_config_root"/[0-9]*/; do
+    if [ -d "$existing_dir" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The full app version (e.g. 7.3.2.6412) from the AppImage asset name in /build_version.
+full_app_version() {
+  grep -oE 'CrealityPrint-V[0-9.]+-' /build_version \
+    | sed -E 's/^CrealityPrint-V//; s/-$//'
+}
+
+# The app keeps its data in a "<major>.<minor>" directory (e.g. 7.3 for 7.3.x).
+data_version() {
+  local version="$1"
+  echo "$version" | cut -d. -f1-2
+}
+
+seed_first_run() {
+  if app_data_exists; then
+    return
+  fi
+
+  local app_version data_dir
+  app_version="$(full_app_version)"
+  if [ -z "$app_version" ]; then
+    log "could not read the app version from /build_version; not seeding"
+    return
+  fi
+  data_dir="${app_config_root}/$(data_version "$app_version")"
+
+  log "first run: seeding ${data_dir}"
+  mkdir -p "$data_dir"
+  # Declines the "User Experience Improvement Program" (telemetry) dialog.
+  cp "${defaults_dir}/privacyInfo.json" "${data_dir}/privacyInfo.json"
+  if ! CP_DESKTOP="$upload_dir" crealityprint-seed-config "$app_version" > "${data_dir}/Creality.conf"; then
+    log "seed generation failed; removing the seed so the app starts clean"
+    rm -rf "$data_dir"
+  fi
+  # Also on failure: mkdir -p above may have created the parent dirs as root.
+  lsiown -R abc:abc "${config_home}/.config/Creality"
+}
+
+repair_ownership
+seed_first_run

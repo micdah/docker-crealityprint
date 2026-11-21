@@ -1,0 +1,10 @@
+#!/bin/bash
+# Stable launcher for Creality Print.
+#
+# Why: the base image copies autostart and menu.xml into /config only once, so whatever they
+# call must never change between image versions. Every launch-time fix lives here instead.
+
+# wxWidgets' GL canvas and GTK popups misbehave as native Wayland clients; run on Xwayland.
+export GDK_BACKEND=x11
+
+exec /opt/crealityprint/AppRun "$@"

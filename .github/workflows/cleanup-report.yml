@@ -1,0 +1,117 @@
+# Housekeeping for the e2e reports on the gh-pages branch (published by build.yml).
+#
+# - When a PR closes: remove its pr-<number>/ folder.
+# - Weekly (and on demand): remove the folder of every closed PR (heals runs that were
+#   cancelled or failed), then squash gh-pages to a single commit, so its history (every
+#   report ever published) doesn't keep growing and every clone of the repo stays small.
+
+name: cleanup e2e reports
+
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "41 5 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: gh-pages
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    # Fork PRs never published a report (their token can't push).
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clean up gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLOSED_PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # Exit status 2 from ls-remote means "no such branch"; anything else is a real error.
+          pages_branch_exists() {
+            local status=0
+            git ls-remote --exit-code --heads "$remote_url" gh-pages > /dev/null || status=$?
+            if [ "$status" -eq 0 ]; then
+              return 0
+            fi
+            if [ "$status" -eq 2 ]; then
+              return 1
+            fi
+            echo "git ls-remote failed with status ${status}" >&2
+            exit "$status"
+          }
+
+          remove_report_dir() {
+            local report_dir="$1"
+            if [ -d "$report_dir" ]; then
+              git rm -r --quiet "$report_dir"
+              echo "removed ${report_dir}/"
+            fi
+          }
+
+          # Folders of PRs that are no longer open (merged or closed).
+          remove_closed_pr_reports() {
+            local report_dir pr_number pr_state
+            for report_dir in pr-*/; do
+              if [ ! -d "$report_dir" ]; then
+                continue
+              fi
+              report_dir="${report_dir%/}"
+              pr_number="${report_dir#pr-}"
+              pr_state="$(gh pr view "$pr_number" --repo "$GITHUB_REPOSITORY" --json state --jq .state)"
+              if [ "$pr_state" != "OPEN" ]; then
+                remove_report_dir "$report_dir"
+              fi
+            done
+          }
+
+          commit_changes() {
+            local message="$1"
+            git add --all
+            if git diff --cached --quiet; then
+              echo "nothing to commit"
+              return 1
+            fi
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit --quiet -m "$message"
+          }
+
+          # Replace the branch history with one commit holding the current reports.
+          squash_history() {
+            git checkout --quiet --orphan squashed
+            git add --all
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit --quiet -m "e2e reports (history squashed $(date -u +%Y-%m-%d))"
+            git push --quiet --force origin squashed:gh-pages
+          }
+
+          if ! pages_branch_exists; then
+            echo "no gh-pages branch; nothing to clean up"
+            exit 0
+          fi
+          git clone --quiet --depth 1 --branch gh-pages "$remote_url" pages
+          cd pages
+
+          if [ -n "$CLOSED_PR_NUMBER" ]; then
+            remove_report_dir "pr-${CLOSED_PR_NUMBER}"
+            if commit_changes "Remove e2e report for closed PR #${CLOSED_PR_NUMBER}"; then
+              git push --quiet origin gh-pages
+            fi
+            exit 0
+          fi
+
+          remove_closed_pr_reports
+          squash_history

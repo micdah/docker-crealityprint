@@ -1,0 +1,111 @@
+#!/bin/bash
+# Print a first-run Creality.conf (JSON) on stdout.
+#
+# usage: crealityprint-seed-config <app-version>      e.g. 7.3.2.6412
+# env:   CP_PRINTER  printer model as named in the app, e.g. "Creality K1C" (optional)
+#        CP_NOZZLE   nozzle diameter, default 0.4
+#        CP_REGION   Creality Cloud region, default Europe
+#        CP_DESKTOP  folder for Import/Export dialogs, default $FILE_MANAGER_PATH or /config/Desktop
+#
+# Why: without CP_PRINTER we only point the file dialogs at the Selkies upload folder and the
+# user gets the app's normal first-run wizard. With CP_PRINTER the wizard is skipped, and the
+# seed MUST carry "models" and "presets": a seed without them leaves an unusable empty printer
+# (docs/research/05, test T6). Preset names come from the printer's own vendor profile, so
+# nothing is hard-coded and an unknown printer falls back to the wizard instead of breaking.
+
+set -euo pipefail
+
+readonly app_version="${1:?usage: crealityprint-seed-config <app-version>}"
+readonly printer_model="${CP_PRINTER:-}"
+readonly nozzle_diameter="${CP_NOZZLE:-0.4}"
+readonly cloud_region="${CP_REGION:-Europe}"
+readonly desktop_dir="${CP_DESKTOP:-${FILE_MANAGER_PATH:-/config/Desktop}}"
+readonly profiles_dir="/opt/crealityprint/resources/profiles"
+
+warn() {
+  echo "[crealityprint-seed] WARNING: $*" >&2
+}
+
+# The settings every seed gets: file dialogs open where Selkies uploads land.
+base_config() {
+  jq -n \
+    --arg app_version "$app_version" \
+    --arg desktop_dir "$desktop_dir" \
+    '{
+      app: { version: $app_version, last_export_path: $desktop_dir },
+      recent: { last_opened_folder: $desktop_dir }
+    }'
+}
+
+# Find "<model> <nozzle> nozzle.json" in any vendor's machine profiles; prints its path.
+find_machine_profile() {
+  local machine_name="$1"
+  find "$profiles_dir" -mindepth 3 -maxdepth 3 \
+    -path "*/machine/${machine_name}.json" \
+    -print -quit
+}
+
+# Check that a process/filament preset of that name ships with the vendor.
+vendor_has_preset() {
+  local vendor_dir="$1"
+  local preset_kind="$2"
+  local preset_name="$3"
+  [ -f "${vendor_dir}/${preset_kind}/${preset_name}.json" ]
+}
+
+# Add the wizard answers: region, finished guide, the printer and its default presets.
+add_printer_seed() {
+  local config_json="$1"
+  local machine_name="${printer_model} ${nozzle_diameter} nozzle"
+
+  local machine_profile
+  machine_profile="$(find_machine_profile "$machine_name")"
+  if [ -z "$machine_profile" ]; then
+    warn "no printer profile named '${machine_name}'; leaving the first-run wizard on"
+    echo "$config_json"
+    return
+  fi
+
+  local vendor_dir vendor_name process_preset filament_preset
+  vendor_dir="$(dirname "$(dirname "$machine_profile")")"
+  vendor_name="$(basename "$vendor_dir")"
+  process_preset="$(jq -r '.default_print_profile // empty' "$machine_profile")"
+  filament_preset="$(jq -r '.default_filament_profile[0] // empty' "$machine_profile")"
+
+  if ! vendor_has_preset "$vendor_dir" process "$process_preset"; then
+    warn "process preset '${process_preset}' not found; leaving the first-run wizard on"
+    echo "$config_json"
+    return
+  fi
+  if ! vendor_has_preset "$vendor_dir" filament "$filament_preset"; then
+    warn "filament preset '${filament_preset}' not found; leaving the first-run wizard on"
+    echo "$config_json"
+    return
+  fi
+
+  jq \
+    --arg region "$cloud_region" \
+    --arg vendor "$vendor_name" \
+    --arg model "$printer_model" \
+    --arg nozzle "$nozzle_diameter" \
+    --arg machine "$machine_name" \
+    --arg process "$process_preset" \
+    --arg filament "$filament_preset" \
+    '.app.region = $region
+     | .app.is_first_install = "1"
+     | .firstguide = { finish: "1" }
+     | .models = [ { vendor: $vendor, model: $model, nozzle_diameter: $nozzle } ]
+     | .presets = { machine: $machine, process: $process, filaments: [ $filament ] }' \
+    <<< "$config_json"
+}
+
+main() {
+  local config_json
+  config_json="$(base_config)"
+  if [ -n "$printer_model" ]; then
+    config_json="$(add_printer_seed "$config_json")"
+  fi
+  echo "$config_json"
+}
+
+main

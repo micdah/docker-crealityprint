@@ -1,0 +1,7 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# Disable the base image's *system* D-Bus, as docker-orcaslicer does: the app doesn't need it,
+# and its hostname1 activation attempts only produce permission errors in a container.
+# The *session* bus (single-instance forwarding) comes from X11 autolaunch and is unaffected.
+
+sleep infinity

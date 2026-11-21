@@ -1,0 +1,8 @@
+{
+  "name": "crealityprint-e2e",
+  "private": true,
+  "description": "End-to-end tests for the Creality Print Selkies image",
+  "devDependencies": {
+    "@playwright/test": "1.49.0"
+  }
+}
