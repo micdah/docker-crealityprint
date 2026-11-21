@@ -128,8 +128,9 @@ main() {
   run_id="$(date +%s)-$$"
   work_dir="${E2E_WORK_ROOT:-${repo_dir}/.e2e-work}/${run_id}"
   mkdir -p "$work_dir" "$artifacts_dir"
-  # Screenshots are written by the specs themselves; drop the previous run's files.
-  rm -rf "${artifacts_dir}/screenshots"
+  # Screenshots are written by the specs themselves; drop the previous run's files, including
+  # the PR comment screenshot, so a failed run never leaves an old one behind.
+  rm -rf "${artifacts_dir}/screenshots" "${artifacts_dir}/smoke"
   trap cleanup EXIT
 
   build_runner_image
