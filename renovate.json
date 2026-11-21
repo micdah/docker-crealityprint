@@ -17,23 +17,23 @@
   ],
   "packageRules": [
     {
-      "description": "Track every plain vX.Y.Z release, including ones GitHub flags as prerelease: creality.com distributes those as current (docs/research). Suffixed tags (-Beta, -rc) are excluded.",
+      "description": "Bundle all tooling updates (base image digest, GitHub Actions, Playwright, Docker CLI, ...) into one PR, at most once a week, majors included.",
+      "matchPackageNames": ["*"],
+      "groupName": "tooling updates",
+      "groupSlug": "tooling",
+      "separateMajorMinor": false,
+      "separateMultipleMajor": false,
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "Creality Print releases get their own PR as soon as they appear: that's the update users notice. Track every plain vX.Y.Z release, including ones GitHub flags as prerelease (creality.com distributes those as current; docs/research). Suffixed tags (-Beta, -rc) are excluded.",
       "matchDepNames": ["CrealityOfficial/CrealityPrint"],
+      "groupName": null,
+      "schedule": ["at any time"],
       "ignoreUnstable": false,
       "allowedVersions": "/^v\\d+\\.\\d+\\.\\d+$/",
       "commitMessageTopic": "Creality Print",
       "labels": ["crealityprint-update"]
-    },
-    {
-      "description": "Base image: keep the debiantrixie tag, bump only the pinned digest.",
-      "matchDepNames": ["ghcr.io/linuxserver/baseimage-selkies"],
-      "matchUpdateTypes": ["digest"],
-      "commitMessageTopic": "Selkies base image"
-    },
-    {
-      "description": "The Playwright npm package and its browser image must move together.",
-      "matchDepNames": ["@playwright/test", "mcr.microsoft.com/playwright"],
-      "groupName": "playwright"
     }
   ]
 }
