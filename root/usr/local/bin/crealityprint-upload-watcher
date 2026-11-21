@@ -1,0 +1,114 @@
+#!/bin/bash
+# Add models uploaded (or dropped) through the Selkies web UI to the running Creality Print.
+#
+# env: FILE_MANAGER_PATH   the Selkies upload folder, default /config/Desktop
+#      AUTO_OPEN_PATTERN   regex of file names to open, default: mesh formats only
+#
+# Why this shape:
+# - Selkies writes each upload to a hidden ".selkies-upload-*" file and renames it into place,
+#   so "moved_from .selkies-upload-*" followed by "moved_to <name>" is a finished upload.
+#   Files the app itself saves into the folder don't look like that, so they never trigger.
+# - crealityprint-open hands the file to the running app over D-Bus: it is added to the
+#   current plate and unsaved work survives. 3MF is left out by default because it replaces
+#   the project (the app asks first, but it's more intrusive).
+
+readonly watch_dir="${FILE_MANAGER_PATH:-/config/Desktop}"
+# The app is on Xwayland :0 (the container env says :1); the session bus and the fallback
+# app launch both need that display.
+export DISPLAY=:0
+readonly model_pattern="${AUTO_OPEN_PATTERN:-\.(stl|obj|step|stp|amf|ply|oltp)$}"
+
+log() {
+  echo "[crealityprint-upload-watcher] $*"
+}
+
+app_is_running() {
+  pgrep -x CrealityPrint > /dev/null
+}
+
+# Try the D-Bus hand-over a few times: an app that is still starting registers on the bus a
+# little after its process appears.
+forward_with_retries() {
+  local file_path="$1"
+  local attempts_left=10
+  while [ "$attempts_left" -gt 0 ]; do
+    if crealityprint-open "$file_path" 2> /dev/null; then
+      return 0
+    fi
+    attempts_left=$((attempts_left - 1))
+    sleep 1
+  done
+  return 1
+}
+
+# Hand one finished upload to the running app; start the app with it if none is running.
+# Never start a second instance next to a running app: that opens a second window over the
+# first one instead of adding the model to the user's plate.
+open_in_app() {
+  local file_path="$1"
+  if crealityprint-open "$file_path" 2> /dev/null; then
+    log "added ${file_path} to the running app"
+    return
+  fi
+
+  if app_is_running; then
+    if forward_with_retries "$file_path"; then
+      log "added ${file_path} to the running app"
+    else
+      log "the running app isn't reachable on the session bus; not opening ${file_path} (import it from the app)"
+    fi
+    return
+  fi
+
+  log "no running app found, starting it with ${file_path}"
+  DISPLAY=:0 /usr/local/bin/crealityprint "$file_path" > /dev/null 2>&1 &
+}
+
+# Case-insensitive, so ".STL" matches and a user pattern may use either case.
+is_model_file() {
+  local file_name="$1"
+  shopt -s nocasematch
+  local matches=false
+  if [[ "$file_name" =~ $model_pattern ]]; then
+    matches=true
+  fi
+  shopt -u nocasematch
+  [ "$matches" = true ]
+}
+
+watch_uploads() {
+  local last_moved_from=""
+  local event_name file_path file_name upload_finished
+
+  inotifywait --monitor --quiet \
+    --event moved_from \
+    --event moved_to \
+    --format '%e|%w%f' \
+    "$watch_dir" |
+  while IFS='|' read -r event_name file_path; do
+    file_name="$(basename "$file_path")"
+    case "$event_name" in
+      MOVED_FROM)
+        last_moved_from="$file_name"
+        ;;
+      MOVED_TO)
+        upload_finished=false
+        if [[ "$last_moved_from" == .selkies-upload-* ]]; then
+          upload_finished=true
+        fi
+        last_moved_from=""
+        if [ "$upload_finished" = true ] && is_model_file "$file_name"; then
+          open_in_app "$file_path"
+        fi
+        ;;
+    esac
+  done
+}
+
+main() {
+  mkdir -p "$watch_dir"
+  log "watching ${watch_dir} for ${model_pattern}"
+  watch_uploads
+}
+
+main

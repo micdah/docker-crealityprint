@@ -1,0 +1,11 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# Opt-in upload watcher: AUTO_OPEN_UPLOADS=true adds uploaded models to the running app.
+# When it's off the service just sleeps, the usual lsio pattern for optional services.
+
+auto_open_uploads="${AUTO_OPEN_UPLOADS:-false}"
+if [ "${auto_open_uploads,,}" != "true" ]; then
+  exec sleep infinity
+fi
+
+exec s6-setuidgid abc /usr/local/bin/crealityprint-upload-watcher

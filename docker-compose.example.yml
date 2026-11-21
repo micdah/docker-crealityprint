@@ -1,0 +1,35 @@
+# Example: Creality Print in the browser. Copy to docker-compose.yml and adjust.
+# Open https://<host>:3001 (HTTPS is required; plain HTTP shows a black page).
+services:
+  crealityprint:
+    # Replace <owner> with the GitHub owner publishing the image. Pin a version tag
+    # (e.g. :7.3.2) instead of :latest if you want to control upgrades yourself.
+    image: ghcr.io/<owner>/crealityprint:latest
+    container_name: crealityprint
+    environment:
+      - PUID=1000                         # your user's id (`id -u`)
+      - PGID=1000                         # your user's group id (`id -g`)
+      - TZ=Europe/Copenhagen
+      # First run only: skip the setup wizard with this printer and its default presets.
+      # - CP_PRINTER=Creality K1C
+      # - CP_NOZZLE=0.4
+      # - CP_REGION=Europe
+      # Add uploaded/dropped models straight to the open plate.
+      # - AUTO_OPEN_UPLOADS=true
+      # Protect the UI and the file API with a login (strongly recommended beyond localhost).
+      # - PASSWORD=change-me
+      # Turn browser upload/download off completely.
+      # - SELKIES_FILE_TRANSFERS=none
+    volumes:
+      - ./config:/config                  # all settings, presets, login and projects
+      # A NAS folder that shows up in the Files panel and in the app's file dialogs:
+      # - /mnt/nas/3d-models:/config/Desktop/nas
+    ports:
+      - 3001:3001
+    devices:
+      - /dev/dri:/dev/dri                 # Intel/AMD GPU; remove this line for CPU-only hosts
+    shm_size: "1gb"
+    # Bridge networking works for printers added by IP (status, upload, camera).
+    # Automatic printer discovery needs host networking plus a firewall rule for mDNS:
+    # network_mode: host
+    restart: unless-stopped

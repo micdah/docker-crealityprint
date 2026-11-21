@@ -1,1 +1,4 @@
 .claude/worktrees
+e2e-artifacts/
+.e2e-work/
+node_modules/
