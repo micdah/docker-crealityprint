@@ -139,7 +139,7 @@ The e2e specs start their own containers via the Docker socket and never touch a
 
 PRs can be reviewed without checking them out:
 - Each run's job summary lists the test results.
-- A `report` job merges the per-spec reports into one HTML report with every screenshot inline. It publishes the report to GitHub Pages (`https://<owner>.github.io/<repo>/pr-<number>/`) and links it in a sticky PR comment that is updated on every run and names the commit it describes. The comment also embeds the watcher spec's screenshot of the app with a model loaded on the plate, as a quick smoke check that the app started and renders; open the full report only when that looks wrong. Pushes to `master` publish to `…/master/`.
+- A `report` job merges the per-spec reports into one HTML report with every screenshot inline. It publishes the report to GitHub Pages (`https://<owner>.github.io/<repo>/pr-<number>/`). A `comment` job then links it in a sticky PR comment that is updated on every run and names the commit it describes, also when no report could be published. The comment also embeds the watcher spec's screenshot of the app with a model loaded on the plate, as a quick smoke check that the app started and renders; open the full report only when that looks wrong. Pushes to `master` publish to `…/master/`.
 - A PR's report is removed when it closes. A weekly cleanup also prunes reports of closed PRs and squashes the `gh-pages` history to one commit, so it doesn't grow. Fork PRs don't get a published report.
 - The artifacts also hold the raw report, screenshots and logs.
 

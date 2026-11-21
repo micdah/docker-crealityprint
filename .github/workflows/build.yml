@@ -6,6 +6,7 @@
 #   build ──┬── smoke ────────────────┼── ci-ok ── publish (master / schedule / manual only)
 #           └── e2e (one job per spec)┤
 #                                     └── report (merged HTML report with screenshots → GitHub Pages)
+#                                           └── comment (sticky PR comment with the app screenshot)
 #
 # The image is built once and passed to the test jobs as an artifact, and publish pushes that
 # exact tested image. ci-ok is the single status check to require in branch protection.
@@ -218,11 +219,15 @@ jobs:
           if-no-files-found: ignore
 
   # Merge the per-spec reports into one HTML report (a screenshot of each visible check inline)
-  # and publish it to GitHub Pages: pr-<number>/ for PRs, <branch>/ otherwise. The PR gets a
-  # sticky comment that always names the commit it describes, including when no report could be
-  # made (e.g. the build failed), and embeds the watcher spec's screenshot of the app with a
-  # model loaded as a quick smoke check. Skipped for fork PRs (their token can't push) and for the
-  # weekly schedule (nothing new to review). Not part of ci-ok: publishing shouldn't block.
+  # and publish it to GitHub Pages: pr-<number>/ for PRs, <branch>/ otherwise, together with the
+  # watcher spec's screenshot of the app with a model loaded (for the PR comment). Skipped for
+  # fork PRs (their token can't push) and for the weekly schedule (nothing new to review). Not
+  # part of ci-ok: publishing shouldn't block.
+  #
+  # Only the steps that push to gh-pages run here, under the repo-wide gh-pages lock. GitHub keeps
+  # at most one job waiting for that lock and cancels an older waiting one, so the less time each
+  # job holds it, the fewer reports get dropped; waiting for Pages and commenting is left to the
+  # comment job below.
   report:
     needs: [build, e2e]
     if: >-
@@ -233,13 +238,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     concurrency:
       group: gh-pages
       cancel-in-progress: false
-    env:
-      COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    outputs:
+      published: ${{ steps.published.outputs.published }}
+      url: ${{ steps.target.outputs.url }}
+      smoke_found: ${{ steps.smoke.outputs.found }}
+      smoke_caption: ${{ steps.smoke.outputs.caption }}
     steps:
       - uses: actions/checkout@v4
 
@@ -328,34 +334,70 @@ jobs:
           destination_dir: ${{ steps.target.outputs.directory }}
           commit_message: "e2e report for ${{ steps.target.outputs.directory }} (${{ github.sha }})"
 
+      # Only reached when every step above succeeded, so the comment job can trust it.
+      - name: Mark the report as published
+        id: published
+        if: steps.blobs.outputs.found == 'true'
+        run: echo "published=true" >> "$GITHUB_OUTPUT"
+
+  # The sticky PR comment (and the job summary) for the report above. It always names the commit
+  # it describes, including when no report could be published: the build failed, publishing
+  # failed, or the report job was cancelled while waiting for the gh-pages lock. Runs outside that
+  # lock because it may wait minutes for Pages to deploy.
+  comment:
+    needs: [build, e2e, report]
+    if: >-
+      always()
+      && github.event_name != 'schedule'
+      && needs.e2e.result != 'cancelled'
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      REPORT_URL: ${{ needs.report.outputs.url }}
+      PUBLISHED: ${{ needs.report.result == 'success' && needs.report.outputs.published == 'true' }}
+      SMOKE_FOUND: ${{ needs.report.outputs.smoke_found == 'true' }}
+    steps:
+      # For tests/wait-for-published-file.sh.
+      - uses: actions/checkout@v4
+        if: env.PUBLISHED == 'true' && env.SMOKE_FOUND == 'true'
+
+      # The same screenshot the report job published, to compare with what Pages serves.
+      - uses: actions/download-artifact@v4
+        if: env.PUBLISHED == 'true' && env.SMOKE_FOUND == 'true'
+        with:
+          pattern: smoke-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/smoke
+
       # Pages deploys a minute or so after the push; comment only once it serves this run's
       # screenshot, or GitHub's image proxy picks up the old one. A slow deploy only costs a
-      # warning, never the comment.
-      # The step timeout backs up the script's own: this job holds the repo-wide gh-pages lock.
+      # warning, never the comment; the step timeout backs up the script's own.
       - name: Wait for Pages to serve the app screenshot
         id: wait
-        if: steps.smoke.outputs.found == 'true'
+        if: env.PUBLISHED == 'true' && env.SMOKE_FOUND == 'true'
         continue-on-error: true
         timeout-minutes: 7
         env:
-          REPORT_URL: ${{ steps.target.outputs.url }}
-          SMOKE_FILE: ${{ runner.temp }}/site/smoke.png
+          SMOKE_FILE: ${{ runner.temp }}/smoke/smoke.png
         run: tests/wait-for-published-file.sh "${REPORT_URL}smoke.png" "$SMOKE_FILE"
 
       # Embed the image only once Pages serves this run's file: GitHub's image proxy caches what it
       # first fetches, so an early comment would keep showing the old screenshot (or a 404).
       - name: Prepare the app screenshot Markdown
         id: smoke_markdown
-        if: steps.blobs.outputs.found == 'true'
+        if: env.PUBLISHED == 'true'
         env:
-          REPORT_URL: ${{ steps.target.outputs.url }}
-          SCREENSHOT_FOUND: ${{ steps.smoke.outputs.found }}
-          SCREENSHOT_CAPTION: ${{ steps.smoke.outputs.caption }}
+          SCREENSHOT_CAPTION: ${{ needs.report.outputs.smoke_caption }}
           WAIT_OUTCOME: ${{ steps.wait.outcome }}
         run: |
           # Scoped to this run, so the comment never shows the proxy's cached image of an earlier run.
           image_url="${REPORT_URL}smoke.png?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          if [ "$SCREENSHOT_FOUND" != "true" ]; then
+          if [ "$SMOKE_FOUND" != "true" ]; then
             markdown="⚠️ No app screenshot: the watcher spec didn't reach its model-loaded check."
           elif [ "$WAIT_OUTCOME" = "success" ]; then
             alt_text="${SCREENSHOT_CAPTION//[\[\]]/}"
@@ -370,9 +412,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Job summary
-        if: steps.blobs.outputs.found == 'true'
+        if: env.PUBLISHED == 'true'
         env:
-          REPORT_URL: ${{ steps.target.outputs.url }}
           E2E_RESULT: ${{ needs.e2e.result }}
           SMOKE_MARKDOWN: ${{ steps.smoke_markdown.outputs.markdown }}
         run: |
@@ -386,7 +427,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on the PR (report published)
-        if: github.event_name == 'pull_request' && steps.blobs.outputs.found == 'true'
+        if: github.event_name == 'pull_request' && env.PUBLISHED == 'true'
         uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2
         with:
           header: e2e-report
@@ -397,21 +438,19 @@ jobs:
 
             ${{ steps.smoke_markdown.outputs.markdown }}
 
-            **[Open the report](${{ steps.target.outputs.url }})**: click a test to see a screenshot of each visible check.
+            **[Open the report](${{ env.REPORT_URL }})**: click a test to see a screenshot of each visible check.
 
             [Workflow run](${{ env.RUN_URL }}). GitHub Pages may need a minute to deploy.
 
       - name: Comment on the PR (no report)
-        if: >-
-          always() && github.event_name == 'pull_request'
-          && (steps.blobs.outputs.found != 'true' || failure())
+        if: always() && github.event_name == 'pull_request' && env.PUBLISHED != 'true'
         uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2
         with:
           header: e2e-report
           message: |
             ### e2e report with screenshots
 
-            ⚠️ No e2e report could be published for commit ${{ env.COMMIT_SHA }} (build: ${{ needs.build.result }}, e2e: ${{ needs.e2e.result }}).
+            ⚠️ No e2e report could be published for commit ${{ env.COMMIT_SHA }} (build: ${{ needs.build.result }}, e2e: ${{ needs.e2e.result }}, report: ${{ needs.report.result }}).
             See the [workflow run](${{ env.RUN_URL }}) for details.
 
   ci-ok:
