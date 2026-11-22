@@ -97,6 +97,22 @@ Tested with a Creality K1C over Docker's default (bridge) network:
 
 **Creality Cloud:** log in with email/password or the QR code. Google/Apple login would open a browser *inside* the container, and no browser is installed.
 
+## Sharp UI on HiDPI screens (optional)
+
+On a HiDPI screen (a 4K monitor or a "Retina" laptop) the app looks tiny at Selkies' default size. Selkies' own **UI Scaling** setting makes it bigger, but **blurry**, because it stretches the finished picture.
+
+Set `CP_UI_SCALE=2` instead, and leave Selkies' UI Scaling at **100 %**:
+- Creality Print then draws itself at twice the size, at your screen's full resolution, so text, icons and the 3D view stay sharp.
+- On a screen at 300 %, use `3`. Only whole numbers from 1 to 4 work; for in-between sizes see below.
+- Don't combine it with Selkies' UI Scaling: both together make the UI four times as big, and the stretching brings the blur back. If you raised it earlier, set it back to 100 % in the sidebar (**Screen Settings**). Keep **HiDPI (Pixel Perfect)** on there (the default), so the stream uses your screen's full resolution.
+- The setting is per container. Every browser gets the same scale, so on a normal (non-HiDPI) monitor the UI also looks twice as big.
+- At 2x the app has as much room as your browser window measures in CSS pixels (a 4K screen at 200 % is 1920×1080). Below about 1600×900 its panels get cramped and overlap, so use a large or full-screen window. Selkies' own scaling has the same limit.
+- It applies when the app starts. After changing it, re-create the container (e.g. `docker compose up -d`); a plain restart keeps the old value.
+- The container log confirms it with a line starting `[crealityprint-init] UI scale`.
+- Text a bit too large at 2? Add `GDK_DPI_SCALE=0.85` (text only, icons stay 2x).
+
+Why Selkies' scaling blurs this app, and what was tested, is in [docs/research/14](docs/research/14-hidpi-scaling.md).
+
 ## Close when idle (optional)
 
 If the server runs all the time but you only open the app now and then, you can let the container close the app while nobody is connected. Even with no browser tab open, the running app keeps using CPU (the container sits at about 2–3 % of one core), keeps waking the CPU so it can't stay in its deepest power-saving states, and holds over 1 GiB of memory.
@@ -134,6 +150,7 @@ Selkies keeps running while the app is closed (about 0.7 % of a core). The log s
 | `CP_REGION` | `Europe` | Creality Cloud region for `CP_PRINTER` (`Europe`, `North America`, `Asia-Pacific`, …) |
 | `AUTO_OPEN_UPLOADS` | `false` | Add uploaded models to the open plate |
 | `AUTO_OPEN_PATTERN` | meshes (`stl obj step stp amf ply oltp`) | Regex of file names to auto-open (case-insensitive) |
+| `CP_UI_SCALE` | – | `2` (or `3`, `4`) draws the app at that scale, sharp on HiDPI screens; keep Selkies' UI Scaling at 100 % (see [Sharp UI on HiDPI screens](#sharp-ui-on-hidpi-screens-optional)) |
 | `IDLE_QUIT` | `false` | `true` closes the app while no browser is connected, and starts it again when one connects (see [Close when idle](#close-when-idle-optional)) |
 | `IDLE_QUIT_AFTER` | `1800` | Seconds with no browser connected before the app is closed |
 | `PASSWORD`, `CUSTOM_USER` | – | Basic-auth login for the UI and file API |

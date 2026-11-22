@@ -7,4 +7,24 @@
 # wxWidgets' GL canvas and GTK popups misbehave as native Wayland clients; run on Xwayland.
 export GDK_BACKEND=x11
 
+# CP_UI_SCALE=2 (or 3, 4) makes GTK draw the whole app, its WebKit pages included, at that
+# scale. Why: Selkies' own "UI Scaling" sets the compositor's output scale, and labwc stretches
+# an Xwayland window like this one as a bitmap, which comes out blurry. With Selkies left at
+# 100 % the desktop already has the browser's full device resolution, so the app drawing
+# itself larger stays sharp (docs/research/14). Only whole numbers: GTK has no fractional
+# widget scale. An invalid value is reported by init-crealityprint-config and ignored here,
+# with the same check in both places.
+apply_ui_scale() {
+  local requested_scale="${CP_UI_SCALE:-}"
+  if [[ ! "$requested_scale" =~ ^[1-4]$ ]]; then
+    return
+  fi
+  if [ "$requested_scale" = "1" ]; then
+    return
+  fi
+  export GDK_SCALE="$requested_scale"
+}
+
+apply_ui_scale
+
 exec /opt/crealityprint/AppRun "$@"

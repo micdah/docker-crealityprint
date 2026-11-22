@@ -115,5 +115,25 @@ seed_first_run() {
   lsiown -R abc:abc "${config_home}/.config/Creality"
 }
 
+# Why: the launcher applies CP_UI_SCALE where the app starts, and that output never reaches the
+# container log. So the value is checked here too, with the launcher's rule (a whole number
+# from 1 to 4), and the result is logged once per start.
+report_ui_scale() {
+  local requested_scale="${CP_UI_SCALE:-}"
+  if [ -z "$requested_scale" ]; then
+    return
+  fi
+  if [[ ! "$requested_scale" =~ ^[1-4]$ ]]; then
+    log "ignoring CP_UI_SCALE=${requested_scale}: use a whole number from 1 to 4 (e.g. 2)"
+    return
+  fi
+  if [ "$requested_scale" = "1" ]; then
+    # 1 leaves a GDK_SCALE from the container's environment in place, as the launcher does.
+    return
+  fi
+  log "UI scale ${requested_scale}: keep Selkies' UI Scaling at 100 % for a sharp picture"
+}
+
 repair_ownership
 seed_first_run
+report_ui_scale

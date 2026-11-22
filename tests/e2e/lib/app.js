@@ -137,6 +137,19 @@ class AppContainer {
     return Number.parseInt(output.trim() || '0', 10);
   }
 
+  // The running app's environment as { NAME: value }: what the launcher actually exported.
+  async appEnvironment() {
+    const output = await this.exec('tr "\\0" "\\n" < "/proc/$(pgrep -o -x CrealityPrint)/environ"');
+    const environment = {};
+    for (const line of output.split('\n')) {
+      const separator = line.indexOf('=');
+      if (separator > 0) {
+        environment[line.slice(0, separator)] = line.slice(separator + 1);
+      }
+    }
+    return environment;
+  }
+
   async waitForAppProcess() {
     await poll('the CrealityPrint process', async () => (await this.appProcessCount()) > 0);
   }
