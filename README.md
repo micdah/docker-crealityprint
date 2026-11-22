@@ -97,6 +97,32 @@ Tested with a Creality K1C over Docker's default (bridge) network:
 
 **Creality Cloud:** log in with email/password or the QR code. Google/Apple login would open a browser *inside* the container, and no browser is installed.
 
+## Close when idle (optional)
+
+If the server runs all the time but you only open the app now and then, you can let the container close the app while nobody is connected. Even with no browser tab open, the running app keeps using CPU (the container sits at about 2–3 % of one core), keeps waking the CPU so it can't stay in its deepest power-saving states, and holds over 1 GiB of memory.
+
+Turn it on with `IDLE_QUIT=true`. Once no browser tab has been connected for `IDLE_QUIT_AFTER` seconds (default `1800`, 30 minutes), Creality Print is closed:
+- **Closed:** Creality Print and its child processes (the WebKit helpers). There is no "save changes?" prompt.
+- **Still running:** Selkies and the desktop (Xwayland, labwc), so the next browser tab can connect.
+- **Coming back:** when a browser tab connects, the app starts again by itself. It takes a few seconds and opens with an empty plate.
+- **Unsaved work:** the app keeps its own backup of an unsaved project. On the next start it asks "Previously unsaved items have been detected. Do you want to restore them?"; choose **Yes** to get your plate back. The backup lives in the container's `/tmp`, so it survives a restart of the container but not a re-create. Save your project to keep it for sure.
+- The timer also starts when the container starts, because nobody is connected then.
+- Only an app closed by the timer comes back by itself. If you close the app yourself, start it again from the desktop's right-click menu.
+- "Connected" means a Selkies session is open: a browser tab you forgot in the background keeps the app running.
+
+When the app is closed:
+- Anything it was still doing stops: a slice, or sending G-code to a printer. A print already running on the printer carries on.
+- Printer connections drop, and connect again when the app starts. That includes the printer camera (WebRTC, e.g. K1 series).
+- With `AUTO_OPEN_UPLOADS=true`, a file uploaded through the file API with no tab open (e.g. with `curl`) isn't opened, and doesn't start the app. It stays in `/config/Desktop`, so import it after you reconnect. Uploads from the browser sidebar always have a tab open, so they are opened as usual.
+
+| No browser connected | App running | App closed |
+|---|---|---|
+| Whole container, CPU | ~3 % of a core | ~1 % of a core |
+| Context switches (≈ CPU wakeups) | ~114/s | ~70/s |
+| Memory | ~1.4 GiB | ~160 MiB |
+
+Selkies keeps running while the app is closed (about 0.7 % of a core). The log shows each step on lines starting with `[crealityprint-idle]`. If you already use `SELKIES_RUN_AFTER_CONNECT` or `SELKIES_RUN_AFTER_DISCONNECT`, the feature stays off and logs a warning, because it needs those two hooks. Details are in [docs/research/13](docs/research/13-idle-quit.md).
+
 ## Environment variables
 
 | Variable | Default | Purpose |
@@ -108,8 +134,11 @@ Tested with a Creality K1C over Docker's default (bridge) network:
 | `CP_REGION` | `Europe` | Creality Cloud region for `CP_PRINTER` (`Europe`, `North America`, `Asia-Pacific`, …) |
 | `AUTO_OPEN_UPLOADS` | `false` | Add uploaded models to the open plate |
 | `AUTO_OPEN_PATTERN` | meshes (`stl obj step stp amf ply oltp`) | Regex of file names to auto-open (case-insensitive) |
+| `IDLE_QUIT` | `false` | `true` closes the app while no browser is connected, and starts it again when one connects (see [Close when idle](#close-when-idle-optional)) |
+| `IDLE_QUIT_AFTER` | `1800` | Seconds with no browser connected before the app is closed |
 | `PASSWORD`, `CUSTOM_USER` | – | Basic-auth login for the UI and file API |
 | `SELKIES_FILE_TRANSFERS` | `upload,download` | `none` disables browser file transfer |
+| `SELKIES_AUDIO_ENABLED` | `false` (image default) | Sound from the app to the browser. Off because Creality Print needs none, and streaming it costs about 3 % of a core while a browser is connected. `true` turns it back on (and with it the microphone) |
 | `FILE_MANAGER_PATH` | `/config/Desktop` | Upload/download folder (also where the app's Import/Export dialogs open on first run) |
 
 The rest of the Selkies/linuxserver options (`CUSTOM_PORT`, `CUSTOM_HTTPS_PORT`, `SELKIES_*`, …) work as described in the [Selkies base image docs](https://docs.linuxserver.io/images/docker-baseimage-selkies/).

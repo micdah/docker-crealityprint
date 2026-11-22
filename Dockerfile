@@ -22,9 +22,13 @@ LABEL org.opencontainers.image.title="Creality Print" \
       crealityprint.version="${CREALITYPRINT_VERSION}" \
       crealityprint.upstream="https://github.com/CrealityOfficial/CrealityPrint/releases/tag/${CREALITYPRINT_VERSION}"
 
+# SELKIES_AUDIO_ENABLED=false: the slicer makes no sound worth streaming, and audio capture costs
+# about 3 % of a core (pulseaudio + pcmflux) while a browser is connected (docs/research/13 §8).
+# Override with -e SELKIES_AUDIO_ENABLED=true.
 ENV TITLE="Creality Print" \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
-    PIXELFLUX_WAYLAND=true
+    PIXELFLUX_WAYLAND=true \
+    SELKIES_AUDIO_ENABLED=false
 
 # Runtime deps. ldd on the AppImage only misses webkit2gtk-4.1 (+ its jsc/soup deps).
 # inotify-tools + jq: upload watcher and first-run seeding. mesa-utils: glxinfo for GPU diagnostics.

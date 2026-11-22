@@ -1,0 +1,417 @@
+#!/bin/bash
+# Close when idle (opt-in, IDLE_QUIT=true): close Creality Print once no browser has been
+# connected for a while, and start it again when a browser connects.
+#
+# usage: see usage() below.
+# env:   IDLE_QUIT_AFTER   seconds without a browser before the app is closed, default 1800
+#
+# Why this shape:
+# - The app and its WebKit helpers keep using CPU (about 2 % of a core) and over 1 GiB of
+#   memory with nobody watching. Closing the app frees both, and a fresh start also brings back
+#   printer connections such as the K1 camera, which don't survive a long pause.
+# - The app is closed with SIGTERM: it exits at once without asking to save. Unsaved work stays
+#   in the app's own backup (/tmp/crealityprint_model), and the next start offers to restore it.
+# - Only the CrealityPrint process tree is closed. Selkies, labwc and Xwayland keep running:
+#   Selkies has to accept the next connection and stream the desktop.
+# - Selkies runs the hooks (SELKIES_RUN_AFTER_CONNECT/_DISCONNECT, installed by
+#   init-crealityprint-idle) but has no timer. The daemon owns the timer and blocks on a FIFO
+#   with `read -t`, so it adds no wakeups of its own beyond one per idle period.
+# - The daemon, not the connect hook, starts the app again. A hook runs inside Selkies (its
+#   environment, its process tree, killed after 300 s); the daemon is an s6 service, like the
+#   one the upload watcher uses to start the app. The daemon also closed the app itself, so it
+#   never starts a new instance while the old one is still exiting (the new one would hand over
+#   to the dying one over D-Bus and exit).
+# - Only an app this script closed is started again (the quit marker). An app the user closed
+#   stays closed; the desktop's right-click menu starts it.
+# - The state file is the truth about whether a browser is connected; the FIFO only wakes the
+#   daemon. Selkies starts each hook as its own task, so a quick disconnect + reconnect can run
+#   two hooks at once, and the later event's hook may finish first. Each state therefore carries
+#   the hook's spawn order, and an older event never overwrites a newer one (see
+#   write_clients_state).
+
+set -uo pipefail
+
+readonly runtime_dir="/run/crealityprint-idle"
+readonly clients_file="${runtime_dir}/clients"
+readonly clients_lock="${runtime_dir}/clients.lock"
+readonly events_fifo="${runtime_dir}/events"
+# Exists while the app is closed because of this script, until a browser brings it back.
+readonly quit_marker="${runtime_dir}/quit-for-idle"
+readonly default_idle_seconds=1800
+# A hook must never hang on a daemon that isn't reading the FIFO.
+readonly notify_timeout_seconds=5
+# SIGTERM ends the app in well under a second; SIGKILL whatever is still there after this.
+readonly quit_grace_seconds=10
+readonly kill_grace_seconds=5
+# Never close an app that is still starting: closing the very first start on a fresh /config a
+# few seconds in left a config that the next start reported as corrupt (docs/research/13 §5).
+readonly min_app_age_seconds=60
+readonly app_launcher="/usr/local/bin/crealityprint"
+
+log() {
+  echo "[crealityprint-idle] $*"
+}
+
+usage() {
+  cat >&2 << 'EOF'
+usage: crealityprint-idle connect      Selkies hook: a first browser connected
+       crealityprint-idle disconnect   Selkies hook: the last browser left
+       crealityprint-idle is-quit      exit 0 while the app is closed (or closing) for being idle (upload watcher)
+       crealityprint-idle daemon       the idle timer (s6 service svc-crealityprint-idle)
+EOF
+  exit 2
+}
+
+# --- the app's process tree ---
+
+# The oldest CrealityPrint process of the desktop user: the app itself, never a helper that a
+# future version might give the same name.
+app_pid() {
+  pgrep -u abc -o -x CrealityPrint
+}
+
+app_is_running() {
+  app_pid > /dev/null
+}
+
+# Every process below the given one (today: the app's WebKit web and network processes).
+print_descendants() {
+  local parent_pid="$1"
+  local child_pid
+  for child_pid in $(pgrep -P "$parent_pid"); do
+    echo "$child_pid"
+    print_descendants "$child_pid"
+  done
+}
+
+# Field <number> of /proc/<pid>/stat. The comm field (2) may hold spaces, so count from the
+# text after its closing parenthesis, which starts at field 3.
+proc_stat_field() {
+  local pid="$1"
+  local field_number="$2"
+  local stat_line
+  if ! stat_line="$(cat "/proc/${pid}/stat" 2> /dev/null)"; then
+    return 1
+  fi
+  local -a fields
+  read -r -a fields <<< "${stat_line##*) }"
+  echo "${fields[$((field_number - 3))]}"
+}
+
+# Whole seconds since the process started: its start time (/proc/<pid>/stat field 22, in clock
+# ticks since boot) against the uptime.
+process_age_seconds() {
+  local pid="$1"
+  local start_ticks uptime_seconds ticks_per_second
+  if ! start_ticks="$(proc_stat_field "$pid" 22)"; then
+    return 1
+  fi
+  read -r uptime_seconds _ < /proc/uptime
+  ticks_per_second="$(getconf CLK_TCK)"
+  echo $((${uptime_seconds%.*} - start_ticks / ticks_per_second))
+}
+
+# True once none of the given processes exists any more.
+all_exited() {
+  local pid
+  for pid in "$@"; do
+    if kill -0 "$pid" 2> /dev/null; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+# Wait up to <seconds> for the given processes to exit. Checks every 0.1 s, but only during a
+# shutdown, which takes well under a second.
+wait_for_exit() {
+  local seconds="$1"
+  shift
+  local checks_left=$((seconds * 10))
+  while [ "$checks_left" -gt 0 ]; do
+    if all_exited "$@"; then
+      return 0
+    fi
+    sleep 0.1
+    checks_left=$((checks_left - 1))
+  done
+  all_exited "$@"
+}
+
+# Close the app and its helpers, and only return once they are gone, so a new instance never
+# meets the old one (or once even SIGKILL has failed; start_app then sees the old app and
+# starts nothing). The marker goes first: from then on the app counts as closed for being idle,
+# also if it exits before the signal arrives, and the upload watcher leaves it alone.
+quit_app() {
+  local app_process_id
+  if ! app_process_id="$(app_pid)"; then
+    return 1
+  fi
+  local -a tree_pids
+  mapfile -t tree_pids < <(
+    echo "$app_process_id"
+    print_descendants "$app_process_id"
+  )
+
+  : > "$quit_marker"
+  kill -TERM "${tree_pids[@]}" 2> /dev/null
+  if ! wait_for_exit "$quit_grace_seconds" "${tree_pids[@]}"; then
+    log "Creality Print did not exit within ${quit_grace_seconds}s of SIGTERM; killing it"
+    kill -KILL "${tree_pids[@]}" 2> /dev/null
+    if ! wait_for_exit "$kill_grace_seconds" "${tree_pids[@]}"; then
+      log "Creality Print is still running after SIGKILL; it won't be started again until it exits"
+    fi
+  fi
+  log "closed Creality Print and $((${#tree_pids[@]} - 1)) helper processes; it starts again when a browser connects"
+}
+
+# Start the app the way the upload watcher's fallback does: on Xwayland :0, where the session
+# bus is found (the container env says :1). setsid --fork detaches it from this service, so s6
+# never signals it and pid 1 reaps it when it exits. 3<&- keeps the daemon's FIFO descriptor
+# (bash doesn't close it on exec) out of the app and its helpers.
+start_app() {
+  local reason="$1"
+  rm -f "$quit_marker"
+  if app_is_running; then
+    # Started meanwhile from the desktop menu, or still exiting after a failed SIGKILL.
+    return
+  fi
+  log "starting Creality Print again: ${reason}"
+  (
+    cd "${HOME:-/config}" || exit 1
+    DISPLAY=:0 setsid --fork "$app_launcher" > /dev/null 2>&1 < /dev/null 3<&-
+  )
+}
+
+# --- browser presence ---
+
+# When Selkies started this hook, as a key that sorts in event order: the start time (clock
+# ticks since boot) and PID of the process Selkies forked. That is our parent `sh` when the
+# command runs through `sh -c` (dash doesn't exec it), otherwise this process.
+hook_spawn_order() {
+  local hook_pid="$$"
+  if [ "$(cat "/proc/${PPID}/comm" 2> /dev/null)" = "sh" ]; then
+    hook_pid="$PPID"
+  fi
+  local start_ticks
+  if ! start_ticks="$(proc_stat_field "$hook_pid" 22)"; then
+    start_ticks=0
+  fi
+  printf '%020d-%010d' "$start_ticks" "$hook_pid"
+}
+
+# The state file holds "<present|absent> <spawn order>"; init writes the state alone. Prints
+# one of the two fields (empty when missing).
+read_clients_field() {
+  local wanted_field="$1"
+  local stored_state=""
+  local stored_order=""
+  read -r stored_state stored_order < "$clients_file" 2> /dev/null
+  if [ "$wanted_field" = "state" ]; then
+    echo "$stored_state"
+  else
+    echo "$stored_order"
+  fi
+}
+
+# Write the state unless a newer event already did. Serialized with flock, so two hooks can't
+# both pass the check; written through a temp file and rename, so the daemon (which reads
+# without the lock) never sees a half-written state.
+write_clients_state() {
+  local state="$1"
+  local spawn_order
+  spawn_order="$(hook_spawn_order)"
+  (
+    if ! flock --timeout "$notify_timeout_seconds" 9; then
+      log "could not lock ${clients_lock}; not recording '${state}'" >&2
+      exit 1
+    fi
+    local stored_order
+    stored_order="$(read_clients_field order)"
+    if [[ "$spawn_order" < "$stored_order" ]]; then
+      # An event that happened later already wrote its state.
+      exit 0
+    fi
+    local temp_file
+    if ! temp_file="$(mktemp "${clients_file}.XXXXXX")"; then
+      exit 1
+    fi
+    printf '%s %s\n' "$state" "$spawn_order" > "$temp_file"
+    mv -f "$temp_file" "$clients_file"
+  ) 9> "$clients_lock"
+}
+
+# Anything but an explicit "absent" (a missing or unreadable file) counts as connected:
+# when in doubt, don't close the app.
+no_browser_connected() {
+  [ "$(read_clients_field state)" = "absent" ]
+}
+
+# Closed or being closed by this script, and not started again yet. The upload watcher checks
+# this, so an upload while the app is exiting neither goes to the dying app nor starts a new one.
+quit_marker_set() {
+  [ -e "$quit_marker" ]
+}
+
+# Closed by this script and gone. A marker next to a running app (it survived SIGKILL) doesn't
+# count, so the timer keeps running for it.
+app_closed_for_idle() {
+  quit_marker_set && ! app_is_running
+}
+
+notify_daemon() {
+  local event="$1"
+  if [ ! -p "$events_fifo" ]; then
+    return 0
+  fi
+  # shellcheck disable=SC2016  # $1/$2 belong to the inner shell
+  timeout "$notify_timeout_seconds" bash -c 'printf "%s\n" "$1" > "$2"' _ "$event" "$events_fifo"
+}
+
+# --- the hooks ---
+
+# The hooks only record the state and wake the daemon; starting the app is the daemon's job.
+on_connect() {
+  write_clients_state present
+  notify_daemon connect
+}
+
+on_disconnect() {
+  write_clients_state absent
+  notify_daemon disconnect
+}
+
+# --- the daemon ---
+
+# IDLE_QUIT_AFTER as a plain number of seconds (10# so "010" isn't read as octal), or the
+# default with a warning: a typo must not turn the feature into "close at once".
+idle_seconds_setting() {
+  local configured="${IDLE_QUIT_AFTER:-$default_idle_seconds}"
+  if [[ "$configured" =~ ^[0-9]+$ ]] && [ "$((10#$configured))" -gt 0 ]; then
+    echo "$((10#$configured))"
+  else
+    log "IDLE_QUIT_AFTER=${configured} is not a positive number of seconds; using ${default_idle_seconds}" >&2
+    echo "$default_idle_seconds"
+  fi
+}
+
+# The timer runs while nobody is connected and the app hasn't been closed by us. It also runs
+# while no app process exists (still starting at boot, or closed by the user): the timeout then
+# finds nothing to close and the timer starts over, one wakeup per idle period.
+timer_should_run() {
+  no_browser_connected && ! app_closed_for_idle
+}
+
+# How long the app must have run before it may be closed: the idle time, so an app started
+# while the timer was already running (by the upload watcher, or from the menu) also gets its
+# full idle time, and never less than the start-up guard.
+required_app_age_seconds() {
+  local idle_seconds="$1"
+  if [ "$idle_seconds" -gt "$min_app_age_seconds" ]; then
+    echo "$idle_seconds"
+  else
+    echo "$min_app_age_seconds"
+  fi
+}
+
+# Re-check before acting: a browser may have connected since the timer started. Sets
+# next_wait_seconds, how long the timer waits next: an app younger than the required age gets
+# the rest of it, then is checked again.
+on_idle_timeout() {
+  local idle_seconds="$1"
+  next_wait_seconds="$idle_seconds"
+  if ! no_browser_connected; then
+    return
+  fi
+  local app_process_id app_age required_age
+  if ! app_process_id="$(app_pid)"; then
+    # Not started yet, or closed by the user: nothing to close.
+    return
+  fi
+  required_age="$(required_app_age_seconds "$idle_seconds")"
+  if app_age="$(process_age_seconds "$app_process_id")" && [ "$app_age" -lt "$required_age" ]; then
+    next_wait_seconds=$((required_age - app_age))
+    log "Creality Print has only run for ${app_age}s; closing it in ${next_wait_seconds}s"
+    return
+  fi
+  quit_app
+}
+
+# Start the app again once a browser is connected, if this script closed it. Checked before
+# every wait, so a browser that connected while the app was being closed gets it back as soon
+# as the old process tree is gone, and a restarted daemon catches up on a connect it missed.
+start_app_if_browser_returned() {
+  if quit_marker_set && ! no_browser_connected; then
+    start_app "a browser connected"
+  fi
+}
+
+# Only "disconnect" needs a log line: a connect is logged by start_app when it acts. Either
+# event makes the main loop re-evaluate the state file.
+on_event() {
+  local event="$1"
+  local idle_seconds="$2"
+  if [ "$event" = "disconnect" ] && app_is_running; then
+    log "no browser connected; closing Creality Print in ${idle_seconds}s"
+  fi
+}
+
+# Wait for hook events; while nobody is connected, wait at most the idle time and close the
+# app when it runs out.
+run_daemon() {
+  local idle_seconds
+  idle_seconds="$(idle_seconds_setting)"
+  # Opened read-write so the FIFO always has a reader (hooks never block) and never hits EOF.
+  exec 3<> "$events_fifo"
+  log "on: Creality Print is closed after ${idle_seconds}s without a browser connected"
+  if no_browser_connected; then
+    log "no browser connected; closing Creality Print in ${idle_seconds}s"
+  fi
+
+  local event read_status
+  next_wait_seconds="$idle_seconds"
+  while true; do
+    start_app_if_browser_returned
+    if timer_should_run; then
+      read -r -t "$next_wait_seconds" -u 3 event
+      read_status=$?
+      if [ "$read_status" -eq 0 ]; then
+        on_event "$event" "$idle_seconds"
+        next_wait_seconds="$idle_seconds"
+      elif [ "$read_status" -gt 128 ]; then
+        on_idle_timeout "$idle_seconds"
+      fi
+    else
+      next_wait_seconds="$idle_seconds"
+      # Closed by us, or a browser is connected: wait for the next hook without any timer.
+      if read -r -u 3 event; then
+        on_event "$event" "$idle_seconds"
+      fi
+    fi
+  done
+}
+
+main() {
+  if [ "$#" -ne 1 ]; then
+    usage
+  fi
+  case "$1" in
+    connect)
+      on_connect
+      ;;
+    disconnect)
+      on_disconnect
+      ;;
+    is-quit)
+      quit_marker_set
+      ;;
+    daemon)
+      run_daemon
+      ;;
+    *)
+      usage
+      ;;
+  esac
+}
+
+main "$@"
