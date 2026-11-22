@@ -15,6 +15,9 @@ services:
       # - CP_REGION=Europe
       # Add uploaded/dropped models straight to the open plate.
       # - AUTO_OPEN_UPLOADS=true
+      # Freeze the app while no browser is connected (saves idle CPU; it wakes when you connect).
+      # - IDLE_SLEEP=true
+      # - IDLE_SLEEP_AFTER=600            # seconds with no browser before freezing
       # Protect the UI and the file API with a login (strongly recommended beyond localhost).
       # - PASSWORD=change-me
       # Turn browser upload/download off completely.

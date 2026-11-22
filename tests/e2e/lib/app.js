@@ -170,27 +170,44 @@ class AppContainer {
     });
   }
 
-  // Wait for a line in the app's own log (not docker logs): proof the app itself acted.
-  async waitForAppLog(text, timeoutMs = 30000) {
+  // Whether the app's own log (not docker logs) contains text: proof the app itself acted.
+  appLogIncludes(text) {
     const appRoot = path.join(this.configDir, '.config/Creality/Creality Print');
-    await poll(
-      `the app log to contain "${text}"`,
-      async () => {
-        for (const versionDir of fs.readdirSync(appRoot)) {
-          const logDir = path.join(appRoot, versionDir, 'log');
-          if (!fs.existsSync(logDir)) {
-            continue;
-          }
-          for (const logFile of fs.readdirSync(logDir)) {
-            if (fs.readFileSync(path.join(logDir, logFile), 'utf8').includes(text)) {
-              return true;
-            }
-          }
+    if (!fs.existsSync(appRoot)) {
+      return false;
+    }
+    for (const versionDir of fs.readdirSync(appRoot)) {
+      const logDir = path.join(appRoot, versionDir, 'log');
+      if (!fs.existsSync(logDir)) {
+        continue;
+      }
+      for (const logFile of fs.readdirSync(logDir)) {
+        if (fs.readFileSync(path.join(logDir, logFile), 'utf8').includes(text)) {
+          return true;
         }
-        return false;
-      },
-      { timeoutMs },
-    );
+      }
+    }
+    return false;
+  }
+
+  async waitForAppLog(text, timeoutMs = 30000) {
+    await poll(`the app log to contain "${text}"`, async () => this.appLogIncludes(text), { timeoutMs });
+  }
+
+  // The /proc state letter of CrealityPrint and every process below it (its WebKit helpers),
+  // in one exec; "T" means stopped. Empty when the app isn't running.
+  async appTreeStates() {
+    const script = [
+      'app_pid="$(pgrep -u abc -o -x CrealityPrint)" || exit 0',
+      'list_tree() { echo "$1"; for child in $(pgrep -P "$1"); do list_tree "$child"; done; }',
+      'for pid in $(list_tree "$app_pid"); do',
+      '  stat_line="$(cat "/proc/${pid}/stat" 2> /dev/null)" || continue',
+      '  stat_line="${stat_line##*) }"',
+      '  echo "${stat_line%% *}"',
+      'done',
+    ].join('\n');
+    const output = await this.exec(script, { user: 'root' });
+    return output.split('\n').filter(Boolean);
   }
 
   async readAppFile(fileName) {

@@ -97,6 +97,30 @@ Tested with a Creality K1C over Docker's default (bridge) network:
 
 **Creality Cloud:** log in with email/password or the QR code. Google/Apple login would open a browser *inside* the container, and no browser is installed.
 
+## Sleep when idle (optional)
+
+If the server runs all the time but you only open the app now and then, you can let the app sleep while nobody is connected. Even with no browser tab open, the container uses about 2–3 % of one CPU core, and it keeps waking the CPU, so the CPU can't stay in its deepest power-saving states.
+
+Turn it on with `IDLE_SLEEP=true`. Once no browser tab has been connected for `IDLE_SLEEP_AFTER` seconds (default `600`, 10 minutes), the app is frozen:
+- **Frozen:** Creality Print and all its child processes (the WebKit helpers). Nothing is closed. The app keeps its state in memory, including unsaved work.
+- **Still running:** Selkies and the desktop (Xwayland, labwc), so the next browser tab can connect.
+- **Waking:** the app resumes the moment a browser tab connects.
+- The timer also starts when the container starts, because nobody is connected then.
+
+While the app sleeps:
+- Printer connections drop. Live status (temperatures, state) comes back by itself when the app wakes.
+- **The printer camera (WebRTC, e.g. K1 series) does not come back after a sleep.** It keeps showing its last frame until you restart the app: save your project, close the app and start it again from the desktop's right-click menu (or restart the container).
+- A slice or G-code send that is still running when you close the last tab is paused once the timeout passes. It continues on your next visit.
+- With `AUTO_OPEN_UPLOADS=true`, a file uploaded through the file API with no tab open (e.g. with `curl`) isn't opened. It stays in `/config/Desktop`, so import it after you reconnect. Uploads from the browser sidebar always have a tab open, so they are opened as usual.
+
+| No browser connected | Awake | Asleep |
+|---|---|---|
+| Creality Print + WebKit helpers | ~1.5 % of a core | 0 % |
+| Whole container | ~2.3 % of a core | ~0.7 % of a core |
+| Context switches (≈ CPU wakeups) | ~111/s | ~68/s |
+
+Selkies keeps running while the app sleeps (about 0.7 % of a core). The log shows each step on lines starting with `[crealityprint-idle]`. If you already use `SELKIES_RUN_AFTER_CONNECT` or `SELKIES_RUN_AFTER_DISCONNECT`, the feature stays off and logs a warning, because it needs those two hooks. Details are in [docs/research/13](docs/research/13-idle-sleep.md).
+
 ## Environment variables
 
 | Variable | Default | Purpose |
@@ -108,8 +132,11 @@ Tested with a Creality K1C over Docker's default (bridge) network:
 | `CP_REGION` | `Europe` | Creality Cloud region for `CP_PRINTER` (`Europe`, `North America`, `Asia-Pacific`, …) |
 | `AUTO_OPEN_UPLOADS` | `false` | Add uploaded models to the open plate |
 | `AUTO_OPEN_PATTERN` | meshes (`stl obj step stp amf ply oltp`) | Regex of file names to auto-open (case-insensitive) |
+| `IDLE_SLEEP` | `false` | `true` freezes the app while no browser is connected (see [Sleep when idle](#sleep-when-idle-optional)) |
+| `IDLE_SLEEP_AFTER` | `600` | Seconds with no browser connected before the app is frozen |
 | `PASSWORD`, `CUSTOM_USER` | – | Basic-auth login for the UI and file API |
 | `SELKIES_FILE_TRANSFERS` | `upload,download` | `none` disables browser file transfer |
+| `SELKIES_AUDIO_ENABLED` | `false` (image default) | Sound from the app to the browser. Off because Creality Print needs none, and streaming it costs about 3 % of a core while a browser is connected. `true` turns it back on (and with it the microphone) |
 | `FILE_MANAGER_PATH` | `/config/Desktop` | Upload/download folder (also where the app's Import/Export dialogs open on first run) |
 
 The rest of the Selkies/linuxserver options (`CUSTOM_PORT`, `CUSTOM_HTTPS_PORT`, `SELKIES_*`, …) work as described in the [Selkies base image docs](https://docs.linuxserver.io/images/docker-baseimage-selkies/).

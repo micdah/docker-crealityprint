@@ -44,8 +44,15 @@ forward_with_retries() {
 # Hand one finished upload to the running app; start the app with it if none is running.
 # Never start a second instance next to a running app: that opens a second window over the
 # first one instead of adding the model to the user's plate.
+# An app frozen by IDLE_SLEEP is left asleep: checked before any D-Bus send, because a message
+# queued for a frozen app would still be delivered when it wakes.
 open_in_app() {
   local file_path="$1"
+  if crealityprint-idle is-asleep; then
+    log "Creality Print is asleep (IDLE_SLEEP); not opening ${file_path}, import it after you reconnect"
+    return
+  fi
+
   if crealityprint-open "$file_path" 2> /dev/null; then
     log "added ${file_path} to the running app"
     return

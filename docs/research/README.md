@@ -92,6 +92,7 @@ Date: 2026-11-21. These are the research findings for building a `linuxserver/do
 | 10 | [10-implementation-brief.md](10-implementation-brief.md) | Kickoff for the build: proposed Dockerfile changes, repo layout, compose, CI, acceptance checklist, open decisions |
 | 11 | [11-printer-tests.md](11-printer-tests.md) | Real K1C tests: discovery (bridge/host), add-by-IP, upload, cameras, gstreamer, the heater safety finding, re-create persistence |
 | 12 | [12-remaining-hands-on.md](12-remaining-hands-on.md) | Upload watcher with unsaved work (fixed design), clipboard, drag-and-drop, 29-min stability runs (CPU and GPU) |
+| 13 | [13-idle-sleep.md](13-idle-sleep.md) | Opt-in "sleep when idle" (`IDLE_SLEEP`): idle CPU baseline, Selkies presence hooks, freeze/resume design, watcher interaction, tests, measurements |
 
 ## Open questions (need a decision or real hardware)
 

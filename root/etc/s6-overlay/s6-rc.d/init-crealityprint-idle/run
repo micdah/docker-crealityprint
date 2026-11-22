@@ -1,0 +1,73 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# Opt-in sleep when idle (IDLE_SLEEP=true): install Selkies' presence hooks and the runtime dir
+# that the hooks and svc-crealityprint-idle share (see /usr/local/bin/crealityprint-idle).
+# Runs as root after the base image's init-config and before the Selkies server starts.
+
+readonly env_dir="/run/s6/container_environment"
+readonly runtime_dir="/run/crealityprint-idle"
+readonly connect_hook="/usr/local/bin/crealityprint-idle connect"
+readonly disconnect_hook="/usr/local/bin/crealityprint-idle disconnect"
+
+log() {
+  echo "[crealityprint-idle] $*"
+}
+
+idle_sleep_enabled() {
+  local idle_sleep="${IDLE_SLEEP:-false}"
+  [ "${idle_sleep,,}" = "true" ]
+}
+
+# A hook value that isn't ours means the user set their own.
+is_foreign_hook() {
+  local hook_value="$1"
+  local own_hook="$2"
+  [ -n "$hook_value" ] && [ "$hook_value" != "$own_hook" ]
+}
+
+# Why: /run isn't a tmpfs in Docker, so a previous start's FIFO and hooks may still be there.
+# Clear them every start, so turning IDLE_SLEEP off really turns everything off.
+clear_previous_state() {
+  rm -rf "$runtime_dir"
+  if [ "${SELKIES_RUN_AFTER_CONNECT:-}" = "$connect_hook" ]; then
+    rm -f "${env_dir}/SELKIES_RUN_AFTER_CONNECT"
+  fi
+  if [ "${SELKIES_RUN_AFTER_DISCONNECT:-}" = "$disconnect_hook" ]; then
+    rm -f "${env_dir}/SELKIES_RUN_AFTER_DISCONNECT"
+  fi
+}
+
+# Nobody is connected at boot, so the state starts "absent" and the daemon arms its timer.
+create_runtime_dir() {
+  mkdir -p "$runtime_dir"
+  mkfifo "${runtime_dir}/events"
+  printf 'absent\n' > "${runtime_dir}/clients"
+  chown -R abc:abc "$runtime_dir"
+  chmod 0700 "$runtime_dir"
+}
+
+install_hooks() {
+  printf '%s' "$connect_hook" > "${env_dir}/SELKIES_RUN_AFTER_CONNECT"
+  printf '%s' "$disconnect_hook" > "${env_dir}/SELKIES_RUN_AFTER_DISCONNECT"
+}
+
+main() {
+  # Read before clearing: these are the values from the container's environment.
+  local user_connect_hook="${SELKIES_RUN_AFTER_CONNECT:-}"
+  local user_disconnect_hook="${SELKIES_RUN_AFTER_DISCONNECT:-}"
+  clear_previous_state
+
+  if ! idle_sleep_enabled; then
+    return
+  fi
+  if is_foreign_hook "$user_connect_hook" "$connect_hook" \
+    || is_foreign_hook "$user_disconnect_hook" "$disconnect_hook"; then
+    log "SELKIES_RUN_AFTER_CONNECT or SELKIES_RUN_AFTER_DISCONNECT is already set; IDLE_SLEEP stays off so your hooks keep working"
+    return
+  fi
+
+  create_runtime_dir
+  install_hooks
+}
+
+main

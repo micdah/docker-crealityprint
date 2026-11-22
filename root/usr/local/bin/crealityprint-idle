@@ -1,0 +1,337 @@
+#!/bin/bash
+# Sleep when idle (opt-in, IDLE_SLEEP=true): freeze Creality Print while no browser is connected.
+#
+# usage: see usage() below.
+# env:   IDLE_SLEEP_AFTER   seconds without a browser before the app is frozen, default 600
+#
+# Why this shape:
+# - The app and its WebKit helpers keep using CPU (about 1.5 % of a core) with nobody watching,
+#   which keeps an always-on server out of its deep C-states. SIGSTOP stops that;
+#   SIGCONT resumes the app exactly where it was, unsaved work included.
+# - Only the CrealityPrint process tree is frozen. Selkies, labwc and Xwayland keep running:
+#   Selkies has to accept the next connection and stream the desktop.
+# - Selkies runs the hooks (SELKIES_RUN_AFTER_CONNECT/_DISCONNECT, installed by
+#   init-crealityprint-idle) but has no timer. The daemon owns the timer and blocks on a FIFO
+#   with `read -t`, so it adds no wakeups of its own.
+# - The state file is the truth about whether a browser is connected; the FIFO only wakes the
+#   daemon. Selkies starts each hook as its own task, so a quick disconnect + reconnect can run
+#   two hooks at once, and the later event's hook may finish first. Each state therefore carries
+#   the hook's spawn order, and an older event never overwrites a newer one (see
+#   write_clients_state).
+# - The connect hook writes the state before it resumes the app, and the daemon re-reads it
+#   after freezing, so a browser that connects mid-freeze never finds a frozen app.
+
+set -uo pipefail
+
+readonly runtime_dir="/run/crealityprint-idle"
+readonly clients_file="${runtime_dir}/clients"
+readonly clients_lock="${runtime_dir}/clients.lock"
+readonly events_fifo="${runtime_dir}/events"
+readonly default_idle_seconds=600
+# A hook must never hang on a daemon that isn't reading the FIFO.
+readonly notify_timeout_seconds=5
+# Helpers can start more helpers; walk the tree again until no new process turns up.
+readonly max_freeze_passes=5
+
+log() {
+  echo "[crealityprint-idle] $*"
+}
+
+usage() {
+  cat >&2 << 'EOF'
+usage: crealityprint-idle connect      Selkies hook: a first browser connected, wake the app now
+       crealityprint-idle disconnect   Selkies hook: the last browser left, start the idle timer
+       crealityprint-idle is-asleep    exit 0 when the app is frozen (used by the upload watcher)
+       crealityprint-idle daemon       the idle timer (s6 service svc-crealityprint-idle)
+EOF
+  exit 2
+}
+
+# --- the app's process tree ---
+
+# The oldest CrealityPrint process of the desktop user: the app itself, never a helper that a
+# future version might give the same name.
+app_pid() {
+  pgrep -u abc -o -x CrealityPrint
+}
+
+# Every process below the given one (today: the app's WebKit web and network processes).
+print_descendants() {
+  local parent_pid="$1"
+  local child_pid
+  for child_pid in $(pgrep -P "$parent_pid"); do
+    echo "$child_pid"
+    print_descendants "$child_pid"
+  done
+}
+
+# Field <number> of /proc/<pid>/stat. The comm field (2) may hold spaces, so count from the
+# text after its closing parenthesis, which starts at field 3.
+proc_stat_field() {
+  local pid="$1"
+  local field_number="$2"
+  local stat_line
+  if ! stat_line="$(cat "/proc/${pid}/stat" 2> /dev/null)"; then
+    return 1
+  fi
+  local -a fields
+  read -r -a fields <<< "${stat_line##*) }"
+  echo "${fields[$((field_number - 3))]}"
+}
+
+# "T" = stopped.
+process_state() {
+  proc_stat_field "$1" 3
+}
+
+app_is_asleep() {
+  local app_process_id
+  if ! app_process_id="$(app_pid)"; then
+    return 1
+  fi
+  [ "$(process_state "$app_process_id")" = "T" ]
+}
+
+# Stop the app before its helpers: a stopped app can't start new helpers meanwhile. A helper
+# may still start a child between the tree walk and its own stop, so walk again until a pass
+# finds nothing new.
+freeze_app() {
+  local app_process_id
+  if ! app_process_id="$(app_pid)"; then
+    return 1
+  fi
+  if ! kill -STOP "$app_process_id" 2> /dev/null; then
+    # The app exited since pgrep found it.
+    return 1
+  fi
+
+  local -A stopped_pids=()
+  local pass helper_pid
+  local found_new
+  for ((pass = 1; pass <= max_freeze_passes; pass++)); do
+    found_new=false
+    for helper_pid in $(print_descendants "$app_process_id"); do
+      if [ -z "${stopped_pids[$helper_pid]:-}" ]; then
+        kill -STOP "$helper_pid" 2> /dev/null
+        stopped_pids[$helper_pid]=1
+        found_new=true
+      fi
+    done
+    if [ "$found_new" = false ]; then
+      break
+    fi
+  done
+  log "asleep: froze Creality Print and ${#stopped_pids[@]} helper processes"
+}
+
+# Resume the helpers before the app, so the app never waits on a stopped helper. Harmless when
+# nothing is frozen, so the connect hook can always call it.
+resume_app() {
+  local reason="$1"
+  local app_process_id
+  if ! app_process_id="$(app_pid)"; then
+    return 0
+  fi
+
+  local was_asleep=false
+  if [ "$(process_state "$app_process_id")" = "T" ]; then
+    was_asleep=true
+  fi
+
+  local helper_pids
+  mapfile -t helper_pids < <(print_descendants "$app_process_id")
+  if [ "${#helper_pids[@]}" -gt 0 ]; then
+    kill -CONT "${helper_pids[@]}" 2> /dev/null
+  fi
+  kill -CONT "$app_process_id"
+
+  if [ "$was_asleep" = true ]; then
+    log "awake: ${reason}"
+  fi
+}
+
+# --- browser presence ---
+
+# When Selkies started this hook, as a key that sorts in event order: the start time (clock
+# ticks since boot) and PID of the process Selkies forked. That is our parent `sh` when the
+# command runs through `sh -c` (dash doesn't exec it), otherwise this process.
+hook_spawn_order() {
+  local hook_pid="$$"
+  if [ "$(cat "/proc/${PPID}/comm" 2> /dev/null)" = "sh" ]; then
+    hook_pid="$PPID"
+  fi
+  local start_ticks
+  if ! start_ticks="$(proc_stat_field "$hook_pid" 22)"; then
+    start_ticks=0
+  fi
+  printf '%020d-%010d' "$start_ticks" "$hook_pid"
+}
+
+# The state file holds "<present|absent> <spawn order>"; init writes the state alone. Prints
+# one of the two fields (empty when missing).
+read_clients_field() {
+  local wanted_field="$1"
+  local stored_state=""
+  local stored_order=""
+  read -r stored_state stored_order < "$clients_file" 2> /dev/null
+  if [ "$wanted_field" = "state" ]; then
+    echo "$stored_state"
+  else
+    echo "$stored_order"
+  fi
+}
+
+# Write the state unless a newer event already did. Serialized with flock, so two hooks can't
+# both pass the check; written through a temp file and rename, so the daemon (which reads
+# without the lock) never sees a half-written state.
+write_clients_state() {
+  local state="$1"
+  local spawn_order
+  spawn_order="$(hook_spawn_order)"
+  (
+    if ! flock --timeout "$notify_timeout_seconds" 9; then
+      log "could not lock ${clients_lock}; not recording '${state}'" >&2
+      exit 1
+    fi
+    local stored_order
+    stored_order="$(read_clients_field order)"
+    if [[ "$spawn_order" < "$stored_order" ]]; then
+      # An event that happened later already wrote its state.
+      exit 0
+    fi
+    local temp_file
+    if ! temp_file="$(mktemp "${clients_file}.XXXXXX")"; then
+      exit 1
+    fi
+    printf '%s %s\n' "$state" "$spawn_order" > "$temp_file"
+    mv -f "$temp_file" "$clients_file"
+  ) 9> "$clients_lock"
+}
+
+# Anything but an explicit "absent" (a missing or unreadable file) counts as connected:
+# when in doubt, don't freeze.
+no_browser_connected() {
+  [ "$(read_clients_field state)" = "absent" ]
+}
+
+notify_daemon() {
+  local event="$1"
+  if [ ! -p "$events_fifo" ]; then
+    return 0
+  fi
+  # shellcheck disable=SC2016  # $1/$2 belong to the inner shell
+  timeout "$notify_timeout_seconds" bash -c 'printf "%s\n" "$1" > "$2"' _ "$event" "$events_fifo"
+}
+
+# --- the hooks ---
+
+on_connect() {
+  write_clients_state present
+  resume_app "a browser connected"
+  notify_daemon connect
+}
+
+on_disconnect() {
+  write_clients_state absent
+  notify_daemon disconnect
+}
+
+# --- the daemon ---
+
+# IDLE_SLEEP_AFTER as a plain number of seconds (10# so "010" isn't read as octal), or the
+# default with a warning: a typo must not turn the feature into "freeze at once".
+idle_seconds_setting() {
+  local configured="${IDLE_SLEEP_AFTER:-$default_idle_seconds}"
+  if [[ "$configured" =~ ^[0-9]+$ ]] && [ "$((10#$configured))" -gt 0 ]; then
+    echo "$((10#$configured))"
+  else
+    log "IDLE_SLEEP_AFTER=${configured} is not a positive number of seconds; using ${default_idle_seconds}" >&2
+    echo "$default_idle_seconds"
+  fi
+}
+
+# The timer only runs while nobody is connected and the app is awake (or not started yet).
+timer_should_run() {
+  no_browser_connected && ! app_is_asleep
+}
+
+# Re-check before acting, and once more after freezing: a browser may have connected since the
+# timer started, or while the processes were being stopped (see "Why this shape").
+on_idle_timeout() {
+  if ! no_browser_connected; then
+    return
+  fi
+  if ! freeze_app; then
+    # Still starting, or closed by the user: try again after the next timeout.
+    return
+  fi
+  if ! no_browser_connected; then
+    resume_app "a browser connected while the app was being frozen"
+  fi
+}
+
+# Only "disconnect" needs a log line here: the connect hook already resumed the app and logged
+# it. Either event makes the main loop re-evaluate the state file.
+on_event() {
+  local event="$1"
+  local idle_seconds="$2"
+  if [ "$event" = "disconnect" ]; then
+    log "no browser connected; freezing Creality Print in ${idle_seconds}s"
+  fi
+}
+
+# Wait for hook events; while nobody is connected and the app is awake, wait at most the idle
+# time and freeze the app when it runs out.
+run_daemon() {
+  local idle_seconds
+  idle_seconds="$(idle_seconds_setting)"
+  # Opened read-write so the FIFO always has a reader (hooks never block) and never hits EOF.
+  exec 3<> "$events_fifo"
+  log "on: Creality Print is frozen after ${idle_seconds}s without a browser connected"
+  if no_browser_connected; then
+    log "no browser connected; freezing Creality Print in ${idle_seconds}s"
+  fi
+
+  local event read_status
+  while true; do
+    if timer_should_run; then
+      read -r -t "$idle_seconds" -u 3 event
+      read_status=$?
+      if [ "$read_status" -eq 0 ]; then
+        on_event "$event" "$idle_seconds"
+      elif [ "$read_status" -gt 128 ]; then
+        on_idle_timeout
+      fi
+    else
+      # Asleep, or a browser is connected: wait for the next hook without any timer.
+      if read -r -u 3 event; then
+        on_event "$event" "$idle_seconds"
+      fi
+    fi
+  done
+}
+
+main() {
+  if [ "$#" -ne 1 ]; then
+    usage
+  fi
+  case "$1" in
+    connect)
+      on_connect
+      ;;
+    disconnect)
+      on_disconnect
+      ;;
+    is-asleep)
+      app_is_asleep
+      ;;
+    daemon)
+      run_daemon
+      ;;
+    *)
+      usage
+      ;;
+  esac
+}
+
+main "$@"

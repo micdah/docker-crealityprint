@@ -45,9 +45,18 @@ test.describe('upload watcher', () => {
     expect(await app.logs()).not.toContain('added /config/Desktop/notes.txt');
   });
 
-  test('the watcher is off by default', async () => {
+  // Also covers IDLE_SLEEP's default (off): it reuses this default container instead of
+  // starting one of its own, and needs no waiting because it checks what init installed.
+  test('the watcher and sleep when idle are off by default', async () => {
     app = await AppContainer.start({ label: 'watcher-off' });
     await app.waitForInit();
-    expect(await app.logs()).not.toContain('[crealityprint-upload-watcher] watching');
+    const logs = await app.logs();
+    expect(logs).not.toContain('[crealityprint-upload-watcher] watching');
+    expect(logs).not.toContain('[crealityprint-idle]');
+    const installedHooks = await app.exec(
+      'ls /run/s6/container_environment | grep SELKIES_RUN_AFTER || true; ls -d /run/crealityprint-idle 2> /dev/null || true',
+      { user: 'root' },
+    );
+    expect(installedHooks.trim()).toBe('');
   });
 });

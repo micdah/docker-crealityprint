@@ -1,0 +1,11 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+# Opt-in sleep when idle: the timer that freezes Creality Print while no browser is connected.
+# init-crealityprint-idle creates the FIFO only when IDLE_SLEEP=true and the Selkies hooks are
+# ours; without it the service just sleeps, the usual lsio pattern for optional services.
+
+if [ ! -p /run/crealityprint-idle/events ]; then
+  exec sleep infinity
+fi
+
+exec s6-setuidgid abc /usr/local/bin/crealityprint-idle daemon
