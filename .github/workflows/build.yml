@@ -52,10 +52,13 @@ jobs:
             tests/e2e-summary.sh \
             tests/wait-for-published-file.sh \
             root/usr/local/bin/crealityprint \
+            root/usr/local/bin/crealityprint-idle \
             root/usr/local/bin/crealityprint-open \
             root/usr/local/bin/crealityprint-seed-config \
             root/usr/local/bin/crealityprint-upload-watcher \
             root/etc/s6-overlay/s6-rc.d/init-crealityprint-config/run \
+            root/etc/s6-overlay/s6-rc.d/init-crealityprint-idle/run \
+            root/etc/s6-overlay/s6-rc.d/svc-crealityprint-idle/run \
             root/etc/s6-overlay/s6-rc.d/svc-crealityprint-upload-watcher/run \
             root/etc/s6-overlay/s6-rc.d/svc-dbus/run
 
@@ -157,7 +160,7 @@ jobs:
       fail-fast: false
       matrix:
         # One job per spec file. gpu.spec.js needs /dev/dri, which hosted runners don't have.
-        spec: [seed, persistence, transfer, watcher, clipboard]
+        spec: [seed, persistence, transfer, watcher, clipboard, idle]
     name: e2e (${{ matrix.spec }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

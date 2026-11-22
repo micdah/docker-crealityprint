@@ -1,0 +1,121 @@
+// Opt-in close when idle: the app is closed while no browser is connected and starts again on
+// connect, but only when the idle timer closed it.
+//
+// One container and one test on purpose: starting a container is the slow part, so all of the
+// behaviour is checked in sequence, with a short idle timeout and polls that return early.
+const fs = require('node:fs');
+const { test, expect } = require('@playwright/test');
+const { AppContainer, poll, writeCubeStl } = require('./lib/app');
+const { openSession, uploadViaApi } = require('./lib/selkies');
+const { snap } = require('./lib/evidence');
+
+const IDLE_SECONDS = 5;
+// Room for slow CI runners; every poll returns as soon as the state is reached.
+const STATE_TIMEOUT_MS = 30000;
+// The daemon never closes an app younger than 60 s, so a close can take that long.
+const CLOSE_TIMEOUT_MS = 120000;
+const POLL_INTERVAL_MS = 500;
+const CLOSED_LOG = '[crealityprint-idle] closed Creality Print';
+const STARTED_LOG = '[crealityprint-idle] starting Creality Print again: a browser connected';
+
+function countOccurrences(text, part) {
+  return text.split(part).length - 1;
+}
+
+async function waitForLogCount(app, description, part, count, timeoutMs = STATE_TIMEOUT_MS) {
+  await poll(description, async () => countOccurrences(await app.logs(), part) >= count, {
+    timeoutMs,
+    intervalMs: POLL_INTERVAL_MS,
+  });
+}
+
+// The browser presence the daemon works from: "present" or "absent".
+async function waitForClientsState(app, state) {
+  await poll(`the idle daemon to record "${state}"`, async () => {
+    const stored = await app.exec('cat /run/crealityprint-idle/clients', { user: 'root' });
+    return stored.split(' ')[0].trim() === state;
+  }, { timeoutMs: STATE_TIMEOUT_MS, intervalMs: POLL_INTERVAL_MS });
+}
+
+async function waitForNoAppProcesses(app, description) {
+  await poll(description, async () => (await app.appTreeProcessCount()) === 0, {
+    timeoutMs: STATE_TIMEOUT_MS,
+    intervalMs: POLL_INTERVAL_MS,
+  });
+}
+
+// Connect and wait until the idle daemon has started the app and its main window is up.
+async function connectAndWaitForApp(app, page, startedCount) {
+  app.markerBaseline = app.countMainWindowMarkers();
+  await openSession(page, app.httpsUrl);
+  await waitForLogCount(app, 'the app to be started on connect', STARTED_LOG, startedCount);
+  await app.waitForMainWindow();
+}
+
+test.describe('close when idle', () => {
+  let app;
+
+  test.afterEach(async ({}, testInfo) => {
+    if (app) {
+      await app.remove(testInfo);
+      app = null;
+    }
+  });
+
+  test('the app closes without a browser, ignores uploads while closed and starts again on connect', async ({ page }, testInfo) => {
+    app = await AppContainer.start({
+      label: 'idle',
+      env: {
+        IDLE_QUIT: 'true',
+        IDLE_QUIT_AFTER: String(IDLE_SECONDS),
+        AUTO_OPEN_UPLOADS: 'true',
+        CP_PRINTER: 'Creality K1C',
+      },
+    });
+    await app.waitForInit();
+
+    // No browser has connected since boot: once it has had its first minute to start (the
+    // start-up guard, longer than the 5 s idle time), the app and all its helpers are closed.
+    await app.waitForAppProcess();
+    await waitForLogCount(app, 'the app to be closed with no browser connected', CLOSED_LOG, 1, CLOSE_TIMEOUT_MS);
+    expect(await app.logs()).toMatch(/\[crealityprint-idle\] Creality Print has only run for \d+s; closing it in \d+s/);
+    await waitForNoAppProcesses(app, 'every app process to exit');
+
+    // A file-API upload while closed is left in the folder, and the app stays closed.
+    const cubeFile = writeCubeStl(testInfo.outputPath(), 'e2e idle.stl', 30);
+    expect(await uploadViaApi(app.httpsUrl, 'e2e idle.stl', fs.readFileSync(cubeFile))).toBe(200);
+    await poll(
+      'the watcher to skip the upload',
+      async () => (await app.logs()).includes('closed while idle (IDLE_QUIT); not opening /config/Desktop/e2e idle.stl'),
+      { timeoutMs: STATE_TIMEOUT_MS, intervalMs: POLL_INTERVAL_MS },
+    );
+    expect(await app.appProcessCount()).toBe(0);
+
+    // A browser connects: the app starts again, once, and is reachable on the session bus.
+    await connectAndWaitForApp(app, page, 1);
+    expect(await app.appProcessCount()).toBe(1);
+    expect(app.appLogIncludes('load_files start filename /config/Desktop/e2e idle.stl')).toBe(false);
+    await snap(page, testInfo, 'After connecting: the app has started again, without the upload made while it was closed');
+    await app.exec('crealityprint-open "/config/Desktop/e2e idle.stl"');
+    await app.waitForAppLog('load_files start filename /config/Desktop/e2e idle.stl');
+
+    // The last browser leaves: the app is closed again after the timeout, and comes back on
+    // the next connect.
+    await page.goto('about:blank');
+    await waitForLogCount(app, 'the app to be closed again after the browser left', CLOSED_LOG, 2, CLOSE_TIMEOUT_MS);
+    await waitForNoAppProcesses(app, 'every app process to exit again');
+    await connectAndWaitForApp(app, page, 2);
+    expect(await app.appProcessCount()).toBe(1);
+
+    // An app the user closed stays closed: leaving and coming back doesn't start it.
+    await app.exec('pkill -x CrealityPrint');
+    await waitForNoAppProcesses(app, 'the app closed by the user to exit');
+    await page.goto('about:blank');
+    await waitForClientsState(app, 'absent');
+    await openSession(page, app.httpsUrl);
+    await waitForClientsState(app, 'present');
+    expect(await app.appProcessCount()).toBe(0);
+    expect(countOccurrences(await app.logs(), STARTED_LOG)).toBe(2);
+    await snap(page, testInfo, 'After the user closed the app: reconnecting leaves the desktop empty');
+  });
+});
