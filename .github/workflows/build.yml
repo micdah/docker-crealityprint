@@ -6,6 +6,7 @@
 #   build ──┬── smoke ────────────────┼── ci-ok ── publish (master / schedule / manual only)
 #           └── e2e (one job per spec)┤
 #                                     └── report (merged HTML report with screenshots → GitHub Pages)
+#                                           └── comment (sticky PR comment with the app screenshot)
 #
 # The image is built once and passed to the test jobs as an artifact, and publish pushes that
 # exact tested image. ci-ok is the single status check to require in branch protection.
@@ -37,7 +38,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: actionlint (workflows)
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.4 -color
@@ -49,6 +50,7 @@ jobs:
             tests/smoke.sh \
             tests/run-e2e.sh \
             tests/e2e-summary.sh \
+            tests/wait-for-published-file.sh \
             root/usr/local/bin/crealityprint \
             root/usr/local/bin/crealityprint-idle \
             root/usr/local/bin/crealityprint-open \
@@ -77,7 +79,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tags: ${{ steps.meta.outputs.tags }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Read the Creality Print version
         id: version
@@ -88,7 +90,7 @@ jobs:
 
       - name: Image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           # Named after the repository (lowercased by metadata-action), e.g. ghcr.io/micdah/docker-crealityprint.
           images: ghcr.io/${{ github.repository }}
@@ -103,10 +105,10 @@ jobs:
             org.opencontainers.image.licenses=AGPL-3.0-only
             org.opencontainers.image.version=${{ steps.version.outputs.version }}-r${{ github.run_number }}
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           platforms: linux/amd64
@@ -127,7 +129,7 @@ jobs:
       - name: Compress the image
         run: zstd -T0 -3 --rm "${{ runner.temp }}/image.tar" -o "${{ runner.temp }}/${IMAGE_ARCHIVE}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ env.IMAGE_ARTIFACT }}
           path: ${{ runner.temp }}/${{ env.IMAGE_ARCHIVE }}
@@ -138,9 +140,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ env.IMAGE_ARTIFACT }}
           path: ${{ runner.temp }}
@@ -161,14 +163,14 @@ jobs:
         spec: [seed, persistence, transfer, watcher, clipboard, idle]
     name: e2e (${{ matrix.spec }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ env.IMAGE_ARTIFACT }}
           path: ${{ runner.temp }}
@@ -190,17 +192,19 @@ jobs:
         run: |
           tests/e2e-summary.sh "${{ runner.temp }}/e2e-artifacts/results.json" "e2e: ${{ matrix.spec }}" >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: e2e-${{ matrix.spec }}
-          # The blob report goes in its own artifact below; don't store it twice.
+          # The blob report and the smoke screenshot go in their own artifacts below; don't
+          # store them twice.
           path: |
             ${{ runner.temp }}/e2e-artifacts
             !${{ runner.temp }}/e2e-artifacts/blob
+            !${{ runner.temp }}/e2e-artifacts/smoke
           retention-days: 14
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: blob-${{ matrix.spec }}
@@ -208,11 +212,25 @@ jobs:
           retention-days: 1
           if-no-files-found: ignore
 
+      # The screenshot for the PR comment (only the watcher spec takes one; see lib/evidence.js).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: smoke-${{ matrix.spec }}
+          path: ${{ runner.temp }}/e2e-artifacts/smoke
+          retention-days: 1
+          if-no-files-found: ignore
+
   # Merge the per-spec reports into one HTML report (a screenshot of each visible check inline)
-  # and publish it to GitHub Pages: pr-<number>/ for PRs, <branch>/ otherwise. The PR gets a
-  # sticky comment that always names the commit it describes, including when no report could be
-  # made (e.g. the build failed). Skipped for fork PRs (their token can't push) and for the
-  # weekly schedule (nothing new to review). Not part of ci-ok: publishing shouldn't block.
+  # and publish it to GitHub Pages: pr-<number>/ for PRs, <branch>/ otherwise, together with the
+  # watcher spec's screenshot of the app with a model loaded (for the PR comment). Skipped for
+  # fork PRs (their token can't push) and for the weekly schedule (nothing new to review). Not
+  # part of ci-ok: publishing shouldn't block.
+  #
+  # Only the steps that push to gh-pages run here, under the repo-wide gh-pages lock. GitHub keeps
+  # at most one job waiting for that lock and cancels an older waiting one, so the less time each
+  # job holds it, the fewer reports get dropped; waiting for Pages and commenting is left to the
+  # comment job below.
   report:
     needs: [build, e2e]
     if: >-
@@ -223,21 +241,29 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     concurrency:
       group: gh-pages
       cancel-in-progress: false
-    env:
-      COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    outputs:
+      published: ${{ steps.published.outputs.published }}
+      url: ${{ steps.target.outputs.url }}
+      smoke_found: ${{ steps.smoke.outputs.found }}
+      smoke_caption: ${{ steps.smoke.outputs.caption }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: blob-*
           merge-multiple: true
           path: ${{ runner.temp }}/blobs
+
+      # Matches nothing when the watcher spec never got to its screenshot; that's not an error.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: smoke-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/smoke
 
       # No blobs means the e2e jobs never ran (build failed) or died before reporting.
       - name: Check for test results
@@ -249,10 +275,10 @@ jobs:
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         if: steps.blobs.outputs.found == 'true'
         with:
-          node-version: 22
+          node-version: 26
 
       - name: Install the Playwright reporter
         if: steps.blobs.outputs.found == 'true'
@@ -283,6 +309,23 @@ jobs:
           echo "directory=${directory}" >> "$GITHUB_OUTPUT"
           echo "url=https://${owner}.github.io/${REPO_NAME}/${directory}/" >> "$GITHUB_OUTPUT"
 
+      # Publish the app screenshot (the watcher spec's, with a model loaded) next to the report.
+      - name: Add the app screenshot to the report
+        id: smoke
+        if: steps.blobs.outputs.found == 'true'
+        env:
+          SMOKE_DIR: ${{ runner.temp }}/smoke
+          SITE_DIR: ${{ runner.temp }}/site
+        run: |
+          if [ -f "${SMOKE_DIR}/smoke.png" ]; then
+            cp "${SMOKE_DIR}/smoke.png" "${SITE_DIR}/smoke.png"
+            caption="$(head -n 1 "${SMOKE_DIR}/caption.txt" 2> /dev/null || true)"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "caption=${caption:-Creality Print running in the browser}" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # Replaces only this report's folder (keep_files off cleans destination_dir); other
       # PRs' and branches' folders are left alone. Pinned: this action gets a write token.
       - name: Publish to GitHub Pages
@@ -294,43 +337,123 @@ jobs:
           destination_dir: ${{ steps.target.outputs.directory }}
           commit_message: "e2e report for ${{ steps.target.outputs.directory }} (${{ github.sha }})"
 
-      - name: Job summary
+      # Only reached when every step above succeeded, so the comment job can trust it.
+      - name: Mark the report as published
+        id: published
         if: steps.blobs.outputs.found == 'true'
+        run: echo "published=true" >> "$GITHUB_OUTPUT"
+
+  # The sticky PR comment (and the job summary) for the report above. It always names the commit
+  # it describes, including when no report could be published: the build failed, publishing
+  # failed, or the report job was cancelled while waiting for the gh-pages lock. Runs outside that
+  # lock because it may wait minutes for Pages to deploy.
+  comment:
+    needs: [build, e2e, report]
+    if: >-
+      always()
+      && github.event_name != 'schedule'
+      && needs.e2e.result != 'cancelled'
+      && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      REPORT_URL: ${{ needs.report.outputs.url }}
+      PUBLISHED: ${{ needs.report.result == 'success' && needs.report.outputs.published == 'true' }}
+      SMOKE_FOUND: ${{ needs.report.outputs.smoke_found == 'true' }}
+    steps:
+      # For tests/wait-for-published-file.sh.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: env.PUBLISHED == 'true' && env.SMOKE_FOUND == 'true'
+
+      # The same screenshot the report job published, to compare with what Pages serves.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: env.PUBLISHED == 'true' && env.SMOKE_FOUND == 'true'
+        with:
+          pattern: smoke-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/smoke
+
+      # Pages deploys a minute or so after the push; comment only once it serves this run's
+      # screenshot, or GitHub's image proxy picks up the old one. A slow deploy only costs a
+      # warning, never the comment; the step timeout backs up the script's own.
+      - name: Wait for Pages to serve the app screenshot
+        id: wait
+        if: env.PUBLISHED == 'true' && env.SMOKE_FOUND == 'true'
+        continue-on-error: true
+        timeout-minutes: 7
         env:
-          REPORT_URL: ${{ steps.target.outputs.url }}
+          SMOKE_FILE: ${{ runner.temp }}/smoke/smoke.png
+        run: tests/wait-for-published-file.sh "${REPORT_URL}smoke.png" "$SMOKE_FILE"
+
+      # Embed the image only once Pages serves this run's file: GitHub's image proxy caches what it
+      # first fetches, so an early comment would keep showing the old screenshot (or a 404).
+      - name: Prepare the app screenshot Markdown
+        id: smoke_markdown
+        if: env.PUBLISHED == 'true'
+        env:
+          SCREENSHOT_CAPTION: ${{ needs.report.outputs.smoke_caption }}
+          WAIT_OUTCOME: ${{ steps.wait.outcome }}
+        run: |
+          # Scoped to this run, so the comment never shows the proxy's cached image of an earlier run.
+          image_url="${REPORT_URL}smoke.png?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [ "$SMOKE_FOUND" != "true" ]; then
+            markdown="⚠️ No app screenshot: the watcher spec didn't reach its model-loaded check."
+          elif [ "$WAIT_OUTCOME" = "success" ]; then
+            alt_text="${SCREENSHOT_CAPTION//[\[\]]/}"
+            markdown="[![${alt_text}](${image_url})](${REPORT_URL})"$'\n\n'"<sub>${SCREENSHOT_CAPTION} (watcher spec)</sub>"
+          else
+            markdown="⚠️ GitHub Pages didn't deploy in time to embed the app screenshot: [open it](${image_url}) (${SCREENSHOT_CAPTION})."
+          fi
+          {
+            echo "markdown<<SMOKE_MARKDOWN_EOF"
+            echo "$markdown"
+            echo "SMOKE_MARKDOWN_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: env.PUBLISHED == 'true'
+        env:
           E2E_RESULT: ${{ needs.e2e.result }}
+          SMOKE_MARKDOWN: ${{ steps.smoke_markdown.outputs.markdown }}
         run: |
           {
             echo "### e2e report with screenshots"
             echo
             echo "Result: **${E2E_RESULT}** for ${COMMIT_SHA}. Report: ${REPORT_URL}"
             echo "(GitHub Pages may need a minute to deploy.)"
+            echo
+            echo "$SMOKE_MARKDOWN"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on the PR (report published)
-        if: github.event_name == 'pull_request' && steps.blobs.outputs.found == 'true'
-        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2
+        if: github.event_name == 'pull_request' && env.PUBLISHED == 'true'
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: e2e-report
           message: |
             ### e2e report with screenshots
 
             ${{ needs.e2e.result == 'success' && '✅ All e2e specs passed' || '❌ Some e2e specs failed' }} for commit ${{ env.COMMIT_SHA }}.
-            **[Open the report](${{ steps.target.outputs.url }})**: click a test to see a screenshot of each visible check.
+
+            ${{ steps.smoke_markdown.outputs.markdown }}
+
+            **[Open the report](${{ env.REPORT_URL }})**: click a test to see a screenshot of each visible check.
 
             [Workflow run](${{ env.RUN_URL }}). GitHub Pages may need a minute to deploy.
 
       - name: Comment on the PR (no report)
-        if: >-
-          always() && github.event_name == 'pull_request'
-          && (steps.blobs.outputs.found != 'true' || failure())
-        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2
+        if: always() && github.event_name == 'pull_request' && env.PUBLISHED != 'true'
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: e2e-report
           message: |
             ### e2e report with screenshots
 
-            ⚠️ No e2e report could be published for commit ${{ env.COMMIT_SHA }} (build: ${{ needs.build.result }}, e2e: ${{ needs.e2e.result }}).
+            ⚠️ No e2e report could be published for commit ${{ env.COMMIT_SHA }} (build: ${{ needs.build.result }}, e2e: ${{ needs.e2e.result }}, report: ${{ needs.report.result }}).
             See the [workflow run](${{ env.RUN_URL }}) for details.
 
   ci-ok:
@@ -357,7 +480,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: ${{ env.IMAGE_ARTIFACT }}
           path: ${{ runner.temp }}
@@ -365,7 +488,7 @@ jobs:
       - name: Load the tested image
         run: zstd -d --stdout "${{ runner.temp }}/${IMAGE_ARCHIVE}" | docker load
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

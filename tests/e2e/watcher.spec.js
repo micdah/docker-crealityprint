@@ -36,7 +36,10 @@ test.describe('upload watcher', () => {
     await app.waitForAppLog('load_files start filename /config/Desktop/e2e watch.stl');
     // Forwarded over D-Bus: still exactly one app process, no second window.
     expect(await app.appProcessCount()).toBe(1);
-    await snap(page, testInfo, 'After uploading "e2e watch.stl": the 40 mm cube is on the plate, same window');
+    // Also the PR comment's smoke screenshot: the app is up and shows a loaded model.
+    await snap(page, testInfo, 'After uploading "e2e watch.stl": the 40 mm cube is on the plate, same window', {
+      smoke: true,
+    });
 
     // Non-model files are left alone.
     expect(await uploadViaApi(app.httpsUrl, 'notes.txt', 'just notes\n')).toBe(200);
