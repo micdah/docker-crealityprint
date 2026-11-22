@@ -89,7 +89,7 @@ Consequences for the design:
 - If the user already set `SELKIES_RUN_AFTER_CONNECT` or `SELKIES_RUN_AFTER_DISCONNECT`, the init step logs a warning and leaves the feature off. It never overwrites a user's hook.
 - If an app restarter is on (`RESTART_APP`, `SELKIES_APP_RESTART` or `EXIT_ON_APP_CLOSE` is `true`), the init step logs a warning and leaves the feature off (§3.7).
 - When off, nothing is installed, so the feature leaves no footprint.
-- The init step clears the previous start's runtime folder and its own hooks first. `/run` isn't a tmpfs in Docker, so after a restart with `IDLE_QUIT` turned off, nothing from the earlier run is left.
+- The init step deletes the previous start's runtime folder first. `/run` isn't a tmpfs in Docker, so it survives a `docker restart`, and a leftover quit marker would make the watcher skip uploads. The hooks need no cleanup: s6 rebuilds `/run/s6/container_environment` from the container's environment on every start [V, [15 §4](15-hidpi-scaling.md)]. (An earlier version also removed its own hooks there; that was dead code.)
 - When on, it creates `/run/crealityprint-idle/` (owned by `abc`) with the FIFO and the state file set to `absent`, then installs the hooks.
 
 ### 3.3 The hooks: `crealityprint-idle connect|disconnect`
@@ -273,7 +273,7 @@ Options, not decided:
 
 ## 9. Tests
 
-Container starts are the slow part of the e2e suite, so the feature adds only one full container (plus two that only boot, for the restarter guard), and every wait is a poll that returns early.
+Container starts are the slow part of the e2e suite, so the feature adds only one full container (plus three that only boot: two for the restarter guard, one for the restart), and every wait is a poll that returns early.
 
 - **`tests/e2e/idle.spec.js`** (its own CI matrix job): one container with `IDLE_QUIT=true`, `IDLE_QUIT_AFTER=5` and `AUTO_OPEN_UPLOADS=true`, one test that checks in order:
   1. with no browser connected, the app is closed once it has had its first minute ("has only run for …" is logged first), and no app or WebKit process is left;
@@ -282,7 +282,8 @@ Container starts are the slow part of the e2e suite, so the feature adds only on
   4. after the page leaves, the app is closed again, and the next connect starts it again;
   5. after the user closes the app (SIGTERM from outside, while connected), leaving and reconnecting does not start it. The test waits for the state file to read `absent` and then `present`, so it knows the daemon saw both hooks.
 - **`tests/e2e/idle.spec.js`**, second group: two init-only containers with `IDLE_QUIT=true` and `RESTART_APP=true` or `HARDEN_OPENBOX=true`. Each checks the guard's log line (with the `HARDEN_OPENBOX` hint only in the second) and that nothing is installed: no hooks and no runtime dir, so the daemon only sleeps (§3.7).
+- **`tests/e2e/idle.spec.js`**, third group: one init-only container with `IDLE_QUIT=true` that gets a fake quit marker and a `docker restart`. After the second start the marker is gone, the runtime dir holds a fresh `clients` and FIFO, the hooks are installed, and the init logged "on" twice with no warning.
 - **`tests/e2e/watcher.spec.js`**: its existing default-settings test also checks that `IDLE_QUIT` is off by default, with no extra container and no waiting: no `[crealityprint-idle]` log lines, no `SELKIES_RUN_AFTER_*` in `/run/s6/container_environment`, and no `/run/crealityprint-idle`.
 - Checked by hand, not in CI: the user's-own-hooks path, the hook ordering (§3.3), a connect during the shutdown grace period (§3.4), and the restore prompt (§5).
 - `tests/e2e/lib/app.js` gains `appTreeProcessCount()` (app + WebKit processes), `appLogIncludes()` and `idleFootprint()` (the installed hooks and runtime dir, shared by both specs).
-- The idle spec takes about **2.4 minutes**, most of it the two waits for the 60-second start-up guard (§5.3). The two init-only tests add about 3 s each.
+- The idle spec takes about **2.4 minutes**, most of it the two waits for the 60-second start-up guard (§5.3). The two init-only tests add about 3 s each, the restart test about 10 s.

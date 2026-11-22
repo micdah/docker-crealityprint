@@ -1,13 +1,19 @@
 #!/usr/bin/with-contenv bash
 # shellcheck shell=bash
-# Prepare /config for Creality Print before the desktop starts.
-# Runs as root after the base image's init-config and before init-config-end.
+# Prepare /config for Creality Print before the desktop starts, and check CP_UI_SCALE.
+# Runs as root after the base image's init-config and before init-config-end, so also before
+# the Selkies server reads its environment.
 
 readonly config_home="/config"
 readonly app_config_root="${config_home}/.config/Creality/Creality Print"
 readonly defaults_dir="/defaults/crealityprint"
 # The Selkies upload folder; the app's Import/Export dialogs are pointed at it on first run.
 readonly upload_dir="${FILE_MANAGER_PATH:-${config_home}/Desktop}"
+# Where s6 keeps the environment that services started with with-contenv (Selkies) get. s6
+# rebuilds it from the container's environment on every start, also after `docker restart`.
+readonly env_dir="/run/s6/container_environment"
+# Selkies' DPI for UI Scaling 100 %: the desktop gets the browser's full device resolution.
+readonly sharp_dpi="96"
 
 log() {
   echo "[crealityprint-init] $*"
@@ -115,10 +121,35 @@ seed_first_run() {
   lsiown -R abc:abc "${config_home}/.config/Creality"
 }
 
+# Why: the Selkies web client picks its UI Scaling from the browser's devicePixelRatio, so a
+# HiDPI browser starts at 200 %. Selkies applies that as labwc's output scale, which stretches
+# this Xwayland app as a bitmap: on top of GDK_SCALE the app would come out 4x and blurry.
+# A server-side DPI of 96 gives every browser the full-resolution desktop at scale 1 instead
+# (docs/research/15 §4). Selkies then ignores the client's choice and hides the setting.
+pin_selkies_dpi() {
+  local requested_scale="$1"
+  local user_dpi="${SELKIES_SCALING_DPI:-}"
+
+  if [ -n "$user_dpi" ]; then
+    local advice=""
+    if [ "$user_dpi" != "$sharp_dpi" ]; then
+      advice="; the app is only sharp at ${sharp_dpi}"
+    fi
+    log "UI scale ${requested_scale}: keeping your SELKIES_SCALING_DPI=${user_dpi}${advice}"
+    return
+  fi
+
+  if ! printf '%s' "$sharp_dpi" > "${env_dir}/SELKIES_SCALING_DPI"; then
+    log "UI scale ${requested_scale}: could not set SELKIES_SCALING_DPI=${sharp_dpi} in ${env_dir}; on a HiDPI browser the app may be blurry"
+    return
+  fi
+  log "UI scale ${requested_scale}: Selkies' UI Scaling fixed at 100 % (SELKIES_SCALING_DPI=${sharp_dpi}) so the app is drawn sharp at the browser's full resolution"
+}
+
 # Why: the launcher applies CP_UI_SCALE where the app starts, and that output never reaches the
 # container log. So the value is checked here too, with the launcher's rule (a whole number
-# from 1 to 4), and the result is logged once per start.
-report_ui_scale() {
+# from 1 to 4). A valid scale also pins Selkies' DPI, and the result is logged once per start.
+configure_ui_scale() {
   local requested_scale="${CP_UI_SCALE:-}"
   if [ -z "$requested_scale" ]; then
     return
@@ -131,9 +162,9 @@ report_ui_scale() {
     # 1 leaves a GDK_SCALE from the container's environment in place, as the launcher does.
     return
   fi
-  log "UI scale ${requested_scale}: keep Selkies' UI Scaling at 100 % for a sharp picture"
+  pin_selkies_dpi "$requested_scale"
 }
 
 repair_ownership
 seed_first_run
-report_ui_scale
+configure_ui_scale

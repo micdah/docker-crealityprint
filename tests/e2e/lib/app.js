@@ -61,6 +61,8 @@ class AppContainer {
     this.name = name;
     this.configDir = configDir;
     this.httpsUrl = null;
+    // How many times the container has started: waitForInit waits for that many init runs.
+    this.starts = 1;
   }
 
   // Start a container. Options: label, env {}, configDir, devices [], puid/pgid.
@@ -92,9 +94,22 @@ class AppContainer {
     const app = new AppContainer(name, dir);
     app.markerBaseline = app.countMainWindowMarkers();
     await docker(args);
-    const portLine = (await docker(['port', name, '3001/tcp'])).trim().split('\n')[0];
-    app.httpsUrl = `https://${portLine}`;
+    await app.readHttpsUrl();
     return app;
+  }
+
+  // Docker assigns the host port on every start, so read it again after a restart.
+  async readHttpsUrl() {
+    const portLine = (await docker(['port', this.name, '3001/tcp'])).trim().split('\n')[0];
+    this.httpsUrl = `https://${portLine}`;
+  }
+
+  // `docker restart`: same environment, same /run (Docker doesn't make it a tmpfs), init runs
+  // again. Follow with waitForInit, which then waits for this start's init.
+  async restart() {
+    await docker(['restart', '--time', '30', this.name]);
+    this.starts += 1;
+    await this.readHttpsUrl();
   }
 
   // Container stdout and stderr together (the init scripts write to both).
@@ -119,9 +134,13 @@ class AppContainer {
   }
 
   // Init done *and* Selkies serving: right after init, nginx answers /api/* with 404 until
-  // the Selkies server (127.0.0.1:8082 inside the container) is up.
+  // the Selkies server (127.0.0.1:8082 inside the container) is up. docker logs keeps every
+  // start's output, so the init lines are counted (one per start), not just found.
   async waitForInit() {
-    await poll('container init', async () => (await this.logs()).includes('[ls.io-init] done.'));
+    await poll('container init', async () => {
+      const initRuns = (await this.logs()).split('[ls.io-init] done.').length - 1;
+      return initRuns >= this.starts;
+    });
     await poll('the Selkies server', async () => {
       const status = await docker(
         ['exec', this.name, 'curl', '-s', '-o', '/dev/null', '-w', '%{http_code}',
@@ -137,6 +156,16 @@ class AppContainer {
   async idleFootprint() {
     const output = await this.exec(
       'ls /run/s6/container_environment | grep SELKIES_RUN_AFTER || true; ls -d /run/crealityprint-idle 2> /dev/null || true',
+      { user: 'root' },
+    );
+    return output.trim();
+  }
+
+  // What init-crealityprint-config installed for CP_UI_SCALE: Selkies' pinned DPI. Empty when
+  // CP_UI_SCALE doesn't pin the DPI.
+  async uiScaleFootprint() {
+    const output = await this.exec(
+      'ls /run/s6/container_environment | grep SELKIES_SCALING_DPI || true',
       { user: 'root' },
     );
     return output.trim();
@@ -158,6 +187,14 @@ class AppContainer {
       }
     }
     return environment;
+  }
+
+  // The size of the Xwayland screen the app draws on, e.g. "3200x1800". Unlike the stream's
+  // size, it shows whether the compositor will stretch the app (output scale above 1).
+  async xDisplaySize() {
+    const output = await this.exec('DISPLAY=:0 xdpyinfo 2> /dev/null | grep dimensions || true');
+    const match = output.match(/dimensions:\s+(\d+x\d+)/);
+    return match ? match[1] : '';
   }
 
   async waitForAppProcess() {

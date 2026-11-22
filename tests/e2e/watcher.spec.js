@@ -48,14 +48,17 @@ test.describe('upload watcher', () => {
     expect(await app.logs()).not.toContain('added /config/Desktop/notes.txt');
   });
 
-  // Also covers IDLE_QUIT's default (off): it reuses this default container instead of
-  // starting one of its own, and needs no waiting because it checks what init installed.
-  test('the watcher and close when idle are off by default', async () => {
+  // Also covers the defaults of IDLE_QUIT (off) and CP_UI_SCALE (Selkies' DPI left alone): it
+  // reuses this default container instead of starting its own, and needs no waiting because
+  // it checks what init installed.
+  test('the watcher, close when idle and the Selkies DPI pin are off by default', async () => {
     app = await AppContainer.start({ label: 'watcher-off' });
     await app.waitForInit();
     const logs = await app.logs();
     expect(logs).not.toContain('[crealityprint-upload-watcher] watching');
     expect(logs).not.toContain('[crealityprint-idle]');
     expect(await app.idleFootprint()).toBe('');
+    expect(logs).not.toContain('[crealityprint-init] UI scale');
+    expect(await app.uiScaleFootprint()).toBe('');
   });
 });

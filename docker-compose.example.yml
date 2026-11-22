@@ -13,8 +13,8 @@ services:
       # - CP_PRINTER=Creality K1C
       # - CP_NOZZLE=0.4
       # - CP_REGION=Europe
-      # HiDPI screen (4K, Retina): draw the app at 2x so it is big *and* sharp. Leave Selkies'
-      # own UI Scaling at 100 % (it stretches the picture and blurs it).
+      # HiDPI screen (4K, Retina): draw the app at 2x so it is big *and* sharp. This also fixes
+      # Selkies' own UI Scaling at 100 % (SELKIES_SCALING_DPI=96), which would blur it.
       # - CP_UI_SCALE=2
       # Add uploaded/dropped models straight to the open plate.
       # - AUTO_OPEN_UPLOADS=true

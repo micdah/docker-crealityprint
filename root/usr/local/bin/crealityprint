@@ -9,11 +9,12 @@ export GDK_BACKEND=x11
 
 # CP_UI_SCALE=2 (or 3, 4) makes GTK draw the whole app, its WebKit pages included, at that
 # scale. Why: Selkies' own "UI Scaling" sets the compositor's output scale, and labwc stretches
-# an Xwayland window like this one as a bitmap, which comes out blurry. With Selkies left at
-# 100 % the desktop already has the browser's full device resolution, so the app drawing
-# itself larger stays sharp (docs/research/15). Only whole numbers: GTK has no fractional
-# widget scale. An invalid value is reported by init-crealityprint-config and ignored here,
-# with the same check in both places.
+# an Xwayland window like this one as a bitmap, which comes out blurry. init-crealityprint-config
+# therefore pins Selkies' DPI to 96 (UI Scaling 100 %) unless SELKIES_SCALING_DPI is set, so
+# the desktop has the browser's full device resolution and the app drawing itself larger stays
+# sharp (docs/research/15). Only whole numbers: GTK has no fractional widget scale. An invalid
+# value is reported by init-crealityprint-config and ignored here, with the same check in both
+# places.
 apply_ui_scale() {
   local requested_scale="${CP_UI_SCALE:-}"
   if [[ ! "$requested_scale" =~ ^[1-4]$ ]]; then
