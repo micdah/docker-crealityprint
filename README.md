@@ -84,6 +84,14 @@ The app runs on the server, so its "Open file" dialog **cannot** see your laptop
 - Set `PASSWORD` (user `abc`, or `CUSTOM_USER`), or put the container behind an authenticating proxy.
 - `SELKIES_FILE_TRANSFERS=none` turns browser upload and download off completely. Note that `HARDEN_DESKTOP=true` only hides the Files panel; transfers still work.
 
+## Closing the app
+
+Closing Creality Print (or a crash) doesn't leave you with an empty desktop: the app starts again by itself within a few seconds. There is no need to reload the page or restart the container.
+
+To turn this off, set `RESTART_APP=false`. You can then still start the app yourself: right-click the empty desktop and choose **Creality Print**. Unless `HARDEN_DESKTOP` is set, the same menu also opens a terminal (`foot`).
+
+If the app keeps closing or crashing straight after it starts, set `RESTART_APP=false` while you look into it, so it isn't started over and over. The app's own logs are in `/config/.config/Creality/Creality Print/<version>/log/`.
+
 ## Printers
 
 Tested with a Creality K1C over Docker's default (bridge) network:
@@ -108,6 +116,7 @@ Tested with a Creality K1C over Docker's default (bridge) network:
 | `CP_REGION` | `Europe` | Creality Cloud region for `CP_PRINTER` (`Europe`, `North America`, `Asia-Pacific`, …) |
 | `AUTO_OPEN_UPLOADS` | `false` | Add uploaded models to the open plate |
 | `AUTO_OPEN_PATTERN` | meshes (`stl obj step stp amf ply oltp`) | Regex of file names to auto-open (case-insensitive) |
+| `RESTART_APP` | `true` | Start the app again when it is closed or crashes |
 | `PASSWORD`, `CUSTOM_USER` | – | Basic-auth login for the UI and file API |
 | `SELKIES_FILE_TRANSFERS` | `upload,download` | `none` disables browser file transfer |
 | `FILE_MANAGER_PATH` | `/config/Desktop` | Upload/download folder (also where the app's Import/Export dialogs open on first run) |

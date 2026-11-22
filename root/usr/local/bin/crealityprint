@@ -7,4 +7,17 @@
 # wxWidgets' GL canvas and GTK popups misbehave as native Wayland clients; run on Xwayland.
 export GDK_BACKEND=x11
 
+# The first launch inherits these from the base's startwm_wayland.sh. A relaunch by the
+# RESTART_APP watchdog only gets the container env, so set the same defaults for every path.
+export XCURSOR_THEME="${XCURSOR_THEME:-breeze_cursors}"
+export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
+ulimit -c 0
+
+# The watchdog's relaunch inherits the s6 service's output, which is the container log; the
+# app's console chatter would flood `docker logs`. The app keeps its own log files in /config.
+# Output still shows when the launcher is run from a terminal.
+if [ ! -t 1 ]; then
+  exec > /dev/null 2>&1
+fi
+
 exec /opt/crealityprint/AppRun "$@"

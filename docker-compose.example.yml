@@ -15,6 +15,8 @@ services:
       # - CP_REGION=Europe
       # Add uploaded/dropped models straight to the open plate.
       # - AUTO_OPEN_UPLOADS=true
+      # Don't start the app again when it is closed (relaunch it from the desktop's right-click menu).
+      # - RESTART_APP=false
       # Protect the UI and the file API with a login (strongly recommended beyond localhost).
       # - PASSWORD=change-me
       # Turn browser upload/download off completely.

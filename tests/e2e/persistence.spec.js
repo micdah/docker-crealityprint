@@ -29,6 +29,8 @@ test.describe.serial('persistence', () => {
     app = await AppContainer.start({ label: 'persist-a', env: { CP_PRINTER: 'Creality K1C' } });
     configDir = app.configDir;
     await app.waitForInit();
+    // Same PUID, so nothing to re-own. (The base image's root-owned autostart must not count.)
+    expect(await app.logs()).not.toContain('re-owning the desktop and app state');
     await app.waitForMainWindow();
     await app.stop();
     await app.remove(testInfo);
@@ -68,6 +70,9 @@ test.describe.serial('persistence', () => {
     expect(await app.logs()).toContain('re-owning the desktop and app state');
     const owner = (await app.exec('stat -c %u "/config/.config/Creality/Creality Print"', { user: 'root' })).trim();
     expect(owner).toBe('4321');
+    // The repair keeps the base image's RESTART_APP lock on the autostart.
+    const autostart = (await app.exec('stat -c "%U:%G %a" /config/.config/labwc/autostart', { user: 'root' })).trim();
+    expect(autostart).toBe('root:abc 550');
 
     await app.waitForMainWindow();
     await poll('the app still running', async () => (await app.appProcessCount()) === 1, { timeoutMs: 20000 });

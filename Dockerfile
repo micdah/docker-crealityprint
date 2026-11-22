@@ -22,9 +22,12 @@ LABEL org.opencontainers.image.title="Creality Print" \
       crealityprint.version="${CREALITYPRINT_VERSION}" \
       crealityprint.upstream="https://github.com/CrealityOfficial/CrealityPrint/releases/tag/${CREALITYPRINT_VERSION}"
 
+# RESTART_APP: the base image's watchdog relaunches the app when it is closed or crashes, instead
+# of leaving an empty desktop. It makes /config/.config/<wm>/autostart root-owned and read-only.
 ENV TITLE="Creality Print" \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
-    PIXELFLUX_WAYLAND=true
+    PIXELFLUX_WAYLAND=true \
+    RESTART_APP=true
 
 # Runtime deps. ldd on the AppImage only misses webkit2gtk-4.1 (+ its jsc/soup deps).
 # inotify-tools + jq: upload watcher and first-run seeding. mesa-utils: glxinfo for GPU diagnostics.

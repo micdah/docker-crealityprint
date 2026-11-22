@@ -26,11 +26,16 @@ app_is_running() {
   pgrep -x CrealityPrint > /dev/null
 }
 
-# Try the D-Bus hand-over a few times: an app that is still starting registers on the bus a
+# With RESTART_APP (the image default) the base image's watchdog relaunches a closed app.
+restart_app_is_on() {
+  [[ "${RESTART_APP,,}" == "true" ]]
+}
+
+# Try the D-Bus hand-over once a second: an app that is still starting registers on the bus a
 # little after its process appears.
 forward_with_retries() {
   local file_path="$1"
-  local attempts_left=10
+  local attempts_left="${2:-10}"
   while [ "$attempts_left" -gt 0 ]; do
     if crealityprint-open "$file_path" 2> /dev/null; then
       return 0
@@ -41,7 +46,8 @@ forward_with_retries() {
   return 1
 }
 
-# Hand one finished upload to the running app; start the app with it if none is running.
+# Hand one finished upload to the running app. With no app running, wait for the watchdog's
+# relaunch (RESTART_APP) or else start the app with the file.
 # Never start a second instance next to a running app: that opens a second window over the
 # first one instead of adding the model to the user's plate.
 open_in_app() {
@@ -56,6 +62,17 @@ open_in_app() {
       log "added ${file_path} to the running app"
     else
       log "the running app isn't reachable on the session bus; not opening ${file_path} (import it from the app)"
+    fi
+    return
+  fi
+
+  # Starting an app here would race the watchdog's relaunch and give two windows. Wait for the
+  # relaunched app instead; a fresh start takes a while to reach the session bus.
+  if restart_app_is_on; then
+    if forward_with_retries "$file_path" 120; then
+      log "added ${file_path} to the restarted app"
+    else
+      log "the app didn't come back on the session bus; not opening ${file_path} (import it from the app)"
     fi
     return
   fi
