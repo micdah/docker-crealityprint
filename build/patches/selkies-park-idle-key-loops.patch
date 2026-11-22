@@ -1,0 +1,74 @@
+Park Selkies' two key-handling loops while no key or gamepad is held.
+
+Applied at build time by build/patch-selkies.sh; the build fails if any hunk doesn't apply
+exactly (git apply: no fuzz, only line offsets). Research: docs/research/14-selkies-idle.md.
+
+Why: WebRTCInput._key_stale_sweep (every 100 ms) and _key_repeat_loop (every 20 ms) start
+with the server and poll forever, connected or not: about 60 of the container's ~68 idle
+wakeups a second. With nothing held, both loop bodies are no-ops. The patch keeps their
+interval sleep but then parks them on an asyncio.Event while nothing is held. Held state
+(pressed_keys, gamepad_heartbeats, key_repeat_state, and key_suspended, which needs a
+pressed key) is only ever added while handling a client message, so on_message sets the
+event once each message is handled.
+
+When this stops applying: re-read the two loops and on_message in the new
+selkies/input_handler.py, check that held state is still only added from client messages,
+and regenerate the patch against the new file. Drop it once upstream stops polling idle.
+
+diff --git a/selkies/input_handler.py b/selkies/input_handler.py
+--- a/selkies/input_handler.py
++++ b/selkies/input_handler.py
+@@ -4794,6 +4794,8 @@ class WebRTCInput:
+         self.key_repeat_state = {}
+         self.key_suspended: Dict[int, List[Optional[float]]] = {}
+         self.key_repeat_task = None
++        # docker-crealityprint: set after each client message, so the key loops can park while idle.
++        self.input_wake = asyncio.Event()
+         self.keymap_watch_task = None
+         self.on_update_rate_control_mode = lambda mode, display_id="primary": logger_webrtc_input.warning("unhandled on_update_rate_control_mode")
+         self.on_update_crf = lambda value, display_id="primary": logger_webrtc_input.warning("unhandled on_update_crf")
+@@ -5560,6 +5562,17 @@ class WebRTCInput:
+         self.key_suspended.clear()
+         self._reset_multipart_clipboard()
+ 
++    async def _key_loop_tick(self, interval: float) -> None:
++        """docker-crealityprint: sleep one loop interval, then park while no key or
++        gamepad is held. Only a client message (`on_message`) can make one held, and it
++        sets `input_wake` once handled, so the key loops don't wake 60 times a second
++        with nobody connected."""
++        await asyncio.sleep(interval)
++        while not (self.pressed_keys or self.gamepad_heartbeats
++                   or self.key_suspended or self.key_repeat_state):
++            self.input_wake.clear()
++            await self.input_wake.wait()
++
+     async def _key_stale_sweep(self) -> None:
+         """Auto-release keys and neutralize gamepads whose heartbeats stopped,
+         so no input stays stuck held when a key-up is lost to congestion or the
+@@ -5575,7 +5588,7 @@ class WebRTCInput:
+         """
+         try:
+             while True:
+-                await asyncio.sleep(self.key_sweep_interval)
++                await self._key_loop_tick(self.key_sweep_interval)
+                 if not self.pressed_keys and not self.gamepad_heartbeats:
+                     continue
+                 now = time.monotonic()
+@@ -5667,7 +5680,7 @@ class WebRTCInput:
+         """
+         try:
+             while True:
+-                await asyncio.sleep(self.key_repeat_tick)
++                await self._key_loop_tick(self.key_repeat_tick)
+                 now = time.monotonic()
+                 for keysym, (_beat, live) in list(self.key_suspended.items()):
+                     if live is not None and now - live >= self.key_repeat_tick and keysym in self.pressed_keys:
+@@ -9175,6 +9188,8 @@ class WebRTCInput:
+             logger_webrtc_input.warning(f"Malformed client message {msg[:64]!r}: {e}")
+         except Exception as e:
+             logger_webrtc_input.error(f"Error handling client message {msg[:64]!r}: {e}", exc_info=True)
++        finally:
++            self.input_wake.set()
+ 
+     async def _dispatch_message(self, msg: str, display_id: str = 'primary',
+                                 conn_id: Any = None) -> None:
