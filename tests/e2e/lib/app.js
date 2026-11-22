@@ -132,6 +132,16 @@ class AppContainer {
     }, { intervalMs: 500 });
   }
 
+  // What init-crealityprint-idle installed: the SELKIES_RUN_AFTER_* hooks and the runtime dir,
+  // one per line. Empty when close-when-idle is off.
+  async idleFootprint() {
+    const output = await this.exec(
+      'ls /run/s6/container_environment | grep SELKIES_RUN_AFTER || true; ls -d /run/crealityprint-idle 2> /dev/null || true',
+      { user: 'root' },
+    );
+    return output.trim();
+  }
+
   async appProcessCount() {
     const output = await docker(['exec', this.name, 'pgrep', '-c', '-x', 'CrealityPrint'], { allowFailure: true });
     return Number.parseInt(output.trim() || '0', 10);

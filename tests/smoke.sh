@@ -101,6 +101,16 @@ check_libraries() {
   log "ok: all app libraries resolve"
 }
 
+# vainfo makes the base's init-video pick the i965 driver on Intel Gen9, which streams black
+# (docs/research/04). The Dockerfile purges it; this catches a base that brings it back some
+# other way. Needs no GPU, so it runs on every CI build.
+check_no_vainfo() {
+  if docker exec "$container_name" bash -c 'command -v vainfo' > /dev/null; then
+    fail "vainfo is installed; it gives a black stream on Intel Gen9 GPUs"
+  fi
+  log "ok: vainfo is not installed"
+}
+
 check_icon() {
   local served_icon_sha app_icon_sha
   served_icon_sha="$(curl --silent --insecure "https://127.0.0.1:$(https_port)/icon.png" | sha256sum | cut -d' ' -f1)"
@@ -119,6 +129,7 @@ main() {
   wait_for "the CrealityPrint process" 120 app_running
   check_app_stays_up
   check_libraries
+  check_no_vainfo
   check_icon
   log "PASS"
 }
