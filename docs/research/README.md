@@ -76,6 +76,14 @@ Date: 2026-11-21. These are the research findings for building a `linuxserver/do
   - Or skip downloads entirely by sending G-code to the printer over the LAN.
 - **Security**: `HARDEN_DESKTOP=true` does *not* disable transfers. Use `SELKIES_FILE_TRANSFERS=none` and/or `PASSWORD` (basic auth on the UI and file API) [verified].
 
+### Rust Selkies: move now or wait? [16](16-selkies-rust.md)
+
+- **Upstream rewrote Selkies in Rust for packaging and maintainability, not performance.** The Python 2.2.1 line is frozen. The Rust version will ship as 2.3.0, with no date announced. linuxserver's `dev` tag carries it today, on Ubuntu 26.04 with a redesigned base: no nginx, and its own session and window manager [V].
+- **The port is small and works.** Six small changes, and 15 of 16 e2e tests pass. The AppImage bundles its own pango, so the Ubuntu base doesn't crash it [V].
+- **Performance:** about even under load (−6 points with a GPU, from dropping labwc and nginx). **Worse at idle:** with the app closed it uses 0.48 % of a core against 0.09 %, because the Rust server keeps the always-on key timers that doc 14 parked [V].
+- **HiDPI, found along the way (affects today's image):** a fresh HiDPI browser defaults to Selkies UI Scaling 200 % on both bases, so `CP_UI_SCALE=2` alone gives a 4x blurry app. It is sharp only after the user picks 100 % (stored per browser) or with `SELKIES_SCALING_DPI=96`. Proposed fix: set that DPI whenever `CP_UI_SCALE` ≥ 2 ([16 §6.6](16-selkies-rust.md), N7) [V].
+- **Decision: prepare, but don't move yet.** Land now the three changes that already pay off on Python (an `IDLE_QUIT` guard, a Renovate group for the base image, a `vainfo` purge), keep the rest of the port for the move, and revisit at Selkies 2.3.0 or when `debiantrixie` switches. That switch fails the Renovate build at our patch step, so it can't slip in unnoticed.
+
 ## Documents
 
 | # | File | Contents |
@@ -95,6 +103,7 @@ Date: 2026-11-21. These are the research findings for building a `linuxserver/do
 | 13 | [13-idle-quit.md](13-idle-quit.md) | Opt-in "close when idle" (`IDLE_QUIT`): idle CPU baseline, Selkies presence hooks, close/restart design, unsaved-work recovery, watcher interaction, Selkies' own idle cost, tests, measurements |
 | 14 | [14-selkies-idle.md](14-selkies-idle.md) | Selkies' idle key-loop wakeups, the build-time patch that parks them, how the build fails when it no longer applies, measurements |
 | 15 | [15-hidpi-scaling.md](15-hidpi-scaling.md) | Sharp HiDPI UI (`CP_UI_SCALE`): why Selkies' UI Scaling blurs an Xwayland app, the `GDK_SCALE` spike (3D picking, WebKit pages, fractional variants), design |
+| 16 | [16-selkies-rust.md](16-selkies-rust.md) | Rust Selkies (base `dev`): why upstream rewrote it, roadmap, stability, base contract diff, the hands-on port and its e2e results, Python vs Rust benchmarks, decision and migration plan |
 
 ## Open questions (need a decision or real hardware)
 
