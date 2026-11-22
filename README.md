@@ -137,7 +137,7 @@ When the app is closed:
 | Context switches (≈ CPU wakeups) | ~114/s | ~70/s |
 | Memory | ~1.4 GiB | ~160 MiB |
 
-Selkies keeps running while the app is closed (about 0.7 % of a core). The log shows each step on lines starting with `[crealityprint-idle]`. If you already use `SELKIES_RUN_AFTER_CONNECT` or `SELKIES_RUN_AFTER_DISCONNECT`, the feature stays off and logs a warning, because it needs those two hooks. Details are in [docs/research/13](docs/research/13-idle-quit.md).
+Selkies keeps running while the app is closed (about 0.7 % of a core). The log shows each step on lines starting with `[crealityprint-idle]`. If you already use `SELKIES_RUN_AFTER_CONNECT` or `SELKIES_RUN_AFTER_DISCONNECT`, the feature stays off and logs a warning, because it needs those two hooks. It also stays off, with a warning, next to the base image's app restarter: `RESTART_APP=true`, which `HARDEN_OPENBOX=true` turns on too. The restarter would start the app again right after every idle close, and it would then keep running with nobody connected. With `HARDEN_OPENBOX=true`, set `RESTART_APP=false` to use `IDLE_QUIT`. Details are in [docs/research/13](docs/research/13-idle-quit.md).
 
 ## Environment variables
 
@@ -164,7 +164,7 @@ The rest of the Selkies/linuxserver options (`CUSTOM_PORT`, `CUSTOM_HTTPS_PORT`,
 
 - `:latest` is the newest Creality Print release on GitHub with a plain `vX.Y.Z` tag. That **includes releases GitHub flags as prerelease**, because creality.com offers those as the current download.
 - Every build is also tagged `:<version>` (e.g. `:7.3.2`) and `:<version>-r<build>`. Pin one of those to control upgrades. Rolling back within the same settings folder (e.g. 7.3.x) keeps your settings.
-- New Creality Print releases and Selkies base-image updates arrive as reviewed Renovate PRs. In addition, `latest` is rebuilt weekly without the build cache, so the Debian packages the image adds (e.g. WebKit) pick up security fixes.
+- New Creality Print releases and Selkies base-image updates arrive as reviewed Renovate PRs, each in a PR of their own. In addition, `latest` is rebuilt weekly without the build cache, so the Debian packages the image adds (e.g. WebKit) pick up security fixes.
 - The image patches one Selkies file so it doesn't wake about 60 times a second while nobody types (`build/patches/`, [docs/research/14](docs/research/14-selkies-idle.md)). If a base-image update changes the patched code, the build fails at the patch step and nothing is published until the patch is updated.
 
 ## Development
@@ -195,9 +195,9 @@ One-time setup: after the first run has created the `gh-pages` branch, enable Pa
 After the first publish, the GHCR package is private: make it public in the package settings if others should pull it.
 
 **Updates** come as [Renovate](https://github.com/apps/renovate) PRs. Install the free Renovate GitHub App on the repository. It proposes:
-- new Creality Print releases;
-- base-image digest bumps;
-- Playwright and GitHub Actions updates.
+- new Creality Print releases, as soon as they appear (label `crealityprint-update`);
+- base-image digest bumps, once a week in their own PR (label `base-image-update`), so a bump that fails the build doesn't hold up the rest;
+- Playwright, Docker CLI and GitHub Actions updates, grouped into one weekly "tooling updates" PR.
 
 ## License
 

@@ -34,6 +34,9 @@ ENV TITLE="Creality Print" \
 # inotify-tools + jq: upload watcher and first-run seeding. mesa-utils: glxinfo for GPU diagnostics.
 # Deliberately NOT installed: the optional gstreamer set (camera works without it), vainfo (black
 # stream on Intel Gen9), firefox and variable UI fonts (crash the app). See docs/research/09.
+# vainfo is also purged, in case a base update ships it (the Rust Selkies base does): with it,
+# the base's init-video picks the i965 driver on Intel Gen9 and the stream goes black
+# (docs/research/04). A no-op while it isn't installed.
 # Package versions aren't pinned: they come from the digest-pinned base's Debian release.
 # hadolint ignore=DL3008
 RUN \
@@ -45,6 +48,7 @@ RUN \
     jq \
     libwebkit2gtk-4.1-0 \
     mesa-utils && \
+  apt-get purge -y vainfo && \
   echo "**** cleanup ****" && \
   apt-get autoclean && \
   rm -rf \

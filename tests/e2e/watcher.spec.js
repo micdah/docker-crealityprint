@@ -56,10 +56,6 @@ test.describe('upload watcher', () => {
     const logs = await app.logs();
     expect(logs).not.toContain('[crealityprint-upload-watcher] watching');
     expect(logs).not.toContain('[crealityprint-idle]');
-    const installedHooks = await app.exec(
-      'ls /run/s6/container_environment | grep SELKIES_RUN_AFTER || true; ls -d /run/crealityprint-idle 2> /dev/null || true',
-      { user: 'root' },
-    );
-    expect(installedHooks.trim()).toBe('');
+    expect(await app.idleFootprint()).toBe('');
   });
 });

@@ -13,6 +13,7 @@ Legend: **[V]** = verified by running it or reading the source, **[I]** = inferr
 - Selkies, Xwayland, labwc and the session bus keep running, so the next connection works as usual.
 - It is built on Selkies' own presence hooks, `SELKIES_RUN_AFTER_CONNECT` and `SELKIES_RUN_AFTER_DISCONNECT` [V, §2]. No polling: the daemon blocks on a FIFO with a read timeout.
 - **Off by default.** When off, nothing is installed: no hooks, and the service just runs `sleep infinity`.
+- **Not together with the base's app restarter.** With `RESTART_APP=true` (also turned on by `HARDEN_OPENBOX=true`) the base starts the app again right after an idle close, and it then runs with nobody connected for good. The feature stays off there and logs why [V, §3.7].
 - **Unsaved work is offered back.** SIGTERM ends the app at once without a save prompt, but the app's own project backup survives, and the next start asks "Previously unsaved items have been detected. Do you want to restore them?" [V, §5].
 - **Printer connections come back fully,** including the K1 WebRTC camera, because every return is a fresh start (§7).
 - Costs: a short cold start on reconnect (about 2 s to the main window here), an empty plate unless you restore, a running slice or G-code send is cut off, and file-API uploads with no client connected aren't auto-opened (§4).
@@ -86,6 +87,7 @@ Consequences for the design:
 - `IDLE_QUIT` defaults to `false`. Only `true` (any case) turns it on.
 - `IDLE_QUIT_AFTER` is in seconds, default `1800` (30 minutes): enough to come back and save, and for a slow G-code upload to the printer to finish. A value that isn't a positive integer logs a warning and 1800 is used.
 - If the user already set `SELKIES_RUN_AFTER_CONNECT` or `SELKIES_RUN_AFTER_DISCONNECT`, the init step logs a warning and leaves the feature off. It never overwrites a user's hook.
+- If an app restarter is on (`RESTART_APP`, `SELKIES_APP_RESTART` or `EXIT_ON_APP_CLOSE` is `true`), the init step logs a warning and leaves the feature off (§3.7).
 - When off, nothing is installed, so the feature leaves no footprint.
 - The init step clears the previous start's runtime folder and its own hooks first. `/run` isn't a tmpfs in Docker, so after a restart with `IDLE_QUIT` turned off, nothing from the earlier run is left.
 - When on, it creates `/run/crealityprint-idle/` (owned by `abc`) with the FIFO and the state file set to `absent`, then installs the hooks.
@@ -133,6 +135,27 @@ Consequences for the design:
 - Closing interrupts whatever the app was doing in the background, and returning costs a cold start.
 - The CPU saving is small in absolute terms (a few percent of one core). It matters for always-on, low-power home servers, not for everyone.
 - So the default behaviour stays exactly as before, and the feature leaves no trace when off.
+
+### 3.7 Not together with an app restarter
+
+The base image can restart the app when it exits. That undoes every idle close, so the init step keeps `IDLE_QUIT` off and logs `<SETTING> is on; IDLE_QUIT stays off, …` when one of these is `true`:
+
+| Setting | Base | What it does on app exit |
+|---|---|---|
+| `RESTART_APP` | Python Selkies (today) | `svc-watchdog` polls every second for `sh $HOME/.config/labwc/autostart` and starts it again once it's gone [V, base `a7d1dfd`] |
+| `HARDEN_OPENBOX` | both | turns `RESTART_APP` on, unless the user set `RESTART_APP` (`init-selkies-config` writes it to `/run/s6/container_environment`) [V] |
+| `SELKIES_APP_RESTART` | Rust Selkies (upcoming) | the session restarts the app at once; `RESTART_APP` turns it on [V, base `dev` image] |
+| `EXIT_ON_APP_CLOSE` | Rust Selkies (upcoming) | the container stops when the app exits [V, base `dev` image] |
+
+- The two Rust settings don't exist on today's base. Checking them costs nothing, and the guard is then already in place when the base moves.
+- The value checked is the one the base acts on. `init-crealityprint-idle` depends on `init-config` → `init-selkies-end` → `init-video` → `init-selkies-config`, so the base has written `RESTART_APP` before our script starts, and `with-contenv` loads it [V].
+- With `HARDEN_OPENBOX=true` the log line adds a hint: set `RESTART_APP=false` to use `IDLE_QUIT`. The hint also shows for `SELKIES_APP_RESTART`, because on the Rust base `HARDEN_OPENBOX` turns that on through `RESTART_APP`.
+- `is_true` ignores a `|locked` suffix, as Selkies settings may carry one. The base reads `RESTART_APP` without that strip, so `RESTART_APP=true|locked` turns `IDLE_QUIT` off although no restarter runs. That false alarm errs on the safe side.
+
+**Observed without the guard** (2026-11-22, image from `2ef7ef4`, `IDLE_QUIT=true IDLE_QUIT_AFTER=5 RESTART_APP=true`) [V]:
+- The autostart `sh` is the app's parent, because the launcher `exec`s the app. When the idle daemon closed the app (after the 60 s start-up guard), the `sh` ended too, and the watchdog logged "Application process … has terminated. Restarting..." **0.3 s later**. A new app was running again within the second.
+- That is not a repeating close/restart cycle; it is worse. When the daemon looked at the state again, the app was briefly gone, so it counted as "closed for idle", and the daemon went into its untimed wait for a browser. The relaunched app then ran with nobody connected for as long as we watched (6 minutes, with a 5 s idle time), with `quit-for-idle` still set.
+- While the marker stays, `crealityprint-idle is-quit` reports "closed", so the upload watcher skips every file-API upload (§4). Only the next browser connect clears the marker.
 
 ## 4. Interaction with the upload watcher
 
@@ -250,7 +273,7 @@ Options, not decided:
 
 ## 9. Tests
 
-Container starts are the slow part of the e2e suite, so the feature adds only one, and every wait is a poll that returns early.
+Container starts are the slow part of the e2e suite, so the feature adds only one full container (plus two that only boot, for the restarter guard), and every wait is a poll that returns early.
 
 - **`tests/e2e/idle.spec.js`** (its own CI matrix job): one container with `IDLE_QUIT=true`, `IDLE_QUIT_AFTER=5` and `AUTO_OPEN_UPLOADS=true`, one test that checks in order:
   1. with no browser connected, the app is closed once it has had its first minute ("has only run for …" is logged first), and no app or WebKit process is left;
@@ -258,7 +281,8 @@ Container starts are the slow part of the e2e suite, so the feature adds only on
   3. opening a session starts exactly one app, the main window comes up, the skipped model isn't loaded, and `crealityprint-open` reaches the new instance;
   4. after the page leaves, the app is closed again, and the next connect starts it again;
   5. after the user closes the app (SIGTERM from outside, while connected), leaving and reconnecting does not start it. The test waits for the state file to read `absent` and then `present`, so it knows the daemon saw both hooks.
+- **`tests/e2e/idle.spec.js`**, second group: two init-only containers with `IDLE_QUIT=true` and `RESTART_APP=true` or `HARDEN_OPENBOX=true`. Each checks the guard's log line (with the `HARDEN_OPENBOX` hint only in the second) and that nothing is installed: no hooks and no runtime dir, so the daemon only sleeps (§3.7).
 - **`tests/e2e/watcher.spec.js`**: its existing default-settings test also checks that `IDLE_QUIT` is off by default, with no extra container and no waiting: no `[crealityprint-idle]` log lines, no `SELKIES_RUN_AFTER_*` in `/run/s6/container_environment`, and no `/run/crealityprint-idle`.
 - Checked by hand, not in CI: the user's-own-hooks path, the hook ordering (§3.3), a connect during the shutdown grace period (§3.4), and the restore prompt (§5).
-- `tests/e2e/lib/app.js` gains `appTreeProcessCount()` (app + WebKit processes) and `appLogIncludes()`.
-- The idle spec takes about **2.3 minutes**, most of it the two waits for the 60-second start-up guard (§5.3).
+- `tests/e2e/lib/app.js` gains `appTreeProcessCount()` (app + WebKit processes), `appLogIncludes()` and `idleFootprint()` (the installed hooks and runtime dir, shared by both specs).
+- The idle spec takes about **2.4 minutes**, most of it the two waits for the 60-second start-up guard (§5.3). The two init-only tests add about 3 s each.

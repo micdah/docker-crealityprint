@@ -46,6 +46,50 @@ create_runtime_dir() {
   chmod 0700 "$runtime_dir"
 }
 
+# A setting is on when it reads "true" in any case. The part before a "|" counts, because
+# Selkies settings may be written as "<value>|locked". The base reads RESTART_APP and
+# EXIT_ON_APP_CLOSE without that strip, so "true|locked" there may be a false alarm: that errs
+# on the safe side.
+is_true() {
+  local value="${1:-}"
+  value="${value%%|*}"
+  [ "${value,,}" = "true" ]
+}
+
+# Why: a base that restarts the app when it exits undoes every idle close, or turns it into a
+# container stop.
+# - Python Selkies base (today): RESTART_APP=true runs svc-watchdog, which starts the autostart
+#   again about a second after the app exits. The daemon then waits for a browser while the app
+#   runs with nobody connected and the quit marker set, so the app is never closed again and
+#   file-API uploads are skipped (docs/research/13 §3.7). HARDEN_OPENBOX=true turns RESTART_APP
+#   on unless the user set it; init-selkies-config writes that before this init runs (we come
+#   after init-config, which waits for init-selkies-end), so with-contenv gives us the value
+#   the base acts on.
+# - Rust Selkies base: the session restarts the app at once (SELKIES_APP_RESTART, which
+#   RESTART_APP turns on), or stops the container when the app exits (EXIT_ON_APP_CLOSE).
+# Prints the first conflicting setting, or nothing.
+conflicting_setting() {
+  if is_true "${EXIT_ON_APP_CLOSE:-}"; then
+    echo "EXIT_ON_APP_CLOSE"
+  elif is_true "${SELKIES_APP_RESTART:-}"; then
+    echo "SELKIES_APP_RESTART"
+  elif is_true "${RESTART_APP:-}"; then
+    echo "RESTART_APP"
+  fi
+}
+
+# The log line for a conflict, with a hint when HARDEN_OPENBOX may be what turned the restarter
+# on: it sets RESTART_APP on both bases, and on the Rust base RESTART_APP then sets
+# SELKIES_APP_RESTART.
+log_conflict() {
+  local conflict="$1"
+  local hint=""
+  if [ "$conflict" != "EXIT_ON_APP_CLOSE" ] && is_true "${HARDEN_OPENBOX:-}"; then
+    hint=" (HARDEN_OPENBOX=true turns RESTART_APP on unless you set RESTART_APP=false)"
+  fi
+  log "${conflict} is on; IDLE_QUIT stays off, because the app would be restarted (or the container stopped) after every idle close${hint}"
+}
+
 install_hooks() {
   printf '%s' "$connect_hook" > "${env_dir}/SELKIES_RUN_AFTER_CONNECT"
   printf '%s' "$disconnect_hook" > "${env_dir}/SELKIES_RUN_AFTER_DISCONNECT"
@@ -63,6 +107,12 @@ main() {
   if is_foreign_hook "$user_connect_hook" "$connect_hook" \
     || is_foreign_hook "$user_disconnect_hook" "$disconnect_hook"; then
     log "SELKIES_RUN_AFTER_CONNECT or SELKIES_RUN_AFTER_DISCONNECT is already set; IDLE_QUIT stays off so your hooks keep working"
+    return
+  fi
+  local conflict
+  conflict="$(conflicting_setting)"
+  if [ -n "$conflict" ]; then
+    log_conflict "$conflict"
     return
   fi
 

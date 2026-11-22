@@ -1,8 +1,9 @@
 // Opt-in close when idle: the app is closed while no browser is connected and starts again on
 // connect, but only when the idle timer closed it.
 //
-// One container and one test on purpose: starting a container is the slow part, so all of the
-// behaviour is checked in sequence, with a short idle timeout and polls that return early.
+// The close/start behaviour gets one container and one test on purpose: starting a container is
+// the slow part, so it is all checked in sequence, with a short idle timeout and polls that
+// return early. The restarter guard below adds two containers that only boot.
 const fs = require('node:fs');
 const { test, expect } = require('@playwright/test');
 const { AppContainer, poll, writeCubeStl } = require('./lib/app');
@@ -118,4 +119,37 @@ test.describe('close when idle', () => {
     expect(countOccurrences(await app.logs(), STARTED_LOG)).toBe(2);
     await snap(page, testInfo, 'After the user closed the app: reconnecting leaves the desktop empty');
   });
+});
+
+// The base image's app restarter (RESTART_APP=true, which HARDEN_OPENBOX=true also turns on)
+// starts the app again right after an idle close, so init keeps the feature off and says why.
+// Init only: no app, no browser.
+test.describe('close when idle stays off next to an app restarter', () => {
+  let app;
+
+  test.afterEach(async ({}, testInfo) => {
+    if (app) {
+      await app.remove(testInfo);
+      app = null;
+    }
+  });
+
+  const cases = [
+    { setting: 'RESTART_APP=true', env: { RESTART_APP: 'true' }, hint: false },
+    { setting: 'HARDEN_OPENBOX=true', env: { HARDEN_OPENBOX: 'true' }, hint: true },
+  ];
+  for (const { setting, env, hint } of cases) {
+    test(`with ${setting}, IDLE_QUIT logs why and installs nothing`, async () => {
+      app = await AppContainer.start({
+        label: 'idle-restarter',
+        env: { IDLE_QUIT: 'true', IDLE_QUIT_AFTER: String(IDLE_SECONDS), ...env },
+      });
+      await app.waitForInit();
+      const logs = await app.logs();
+      expect(logs).toContain('[crealityprint-idle] RESTART_APP is on; IDLE_QUIT stays off');
+      expect(logs.includes('HARDEN_OPENBOX=true turns RESTART_APP on')).toBe(hint);
+      // No FIFO means svc-crealityprint-idle only sleeps: the feature is off.
+      expect(await app.idleFootprint()).toBe('');
+    });
+  }
 });
