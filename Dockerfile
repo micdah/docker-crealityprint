@@ -58,6 +58,13 @@ RUN --mount=type=secret,id=github_token,required=false \
   bash /tmp/fetch-crealityprint.sh "${CREALITYPRINT_VERSION}" && \
   rm -rf /tmp/*
 
+# Patch the base image's Selkies so it doesn't poll its key loops while nobody types
+# (docs/research/14). Fails the build when a base update changes the patched code.
+COPY build/patch-selkies.sh build/patches/ /tmp/patch-selkies/
+RUN \
+  bash /tmp/patch-selkies/patch-selkies.sh /tmp/patch-selkies/selkies-*.patch && \
+  rm -rf /tmp/*
+
 COPY /root /
 
 EXPOSE 3001
