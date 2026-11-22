@@ -1,4 +1,4 @@
-# 14 — Sharp UI on HiDPI screens (`CP_UI_SCALE`)
+# 15 — Sharp UI on HiDPI screens (`CP_UI_SCALE`)
 
 Date: 2026-11-22 · Host: Docker 29, x86_64, Arch Linux kernel 7.3.5, Intel UHD 630 · Image: `ghcr.io/micdah/docker-crealityprint:latest` (Creality Print 7.3.2, Selkies base `debiantrixie`, labwc 0.9.7)
 

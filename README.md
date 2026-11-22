@@ -111,7 +111,7 @@ Set `CP_UI_SCALE=2` instead, and leave Selkies' UI Scaling at **100 %**:
 - The container log confirms it with a line starting `[crealityprint-init] UI scale`.
 - Text a bit too large at 2? Add `GDK_DPI_SCALE=0.85` (text only, icons stay 2x).
 
-Why Selkies' scaling blurs this app, and what was tested, is in [docs/research/14](docs/research/14-hidpi-scaling.md).
+Why Selkies' scaling blurs this app, and what was tested, is in [docs/research/15](docs/research/15-hidpi-scaling.md).
 
 ## Close when idle (optional)
 
@@ -165,6 +165,7 @@ The rest of the Selkies/linuxserver options (`CUSTOM_PORT`, `CUSTOM_HTTPS_PORT`,
 - `:latest` is the newest Creality Print release on GitHub with a plain `vX.Y.Z` tag. That **includes releases GitHub flags as prerelease**, because creality.com offers those as the current download.
 - Every build is also tagged `:<version>` (e.g. `:7.3.2`) and `:<version>-r<build>`. Pin one of those to control upgrades. Rolling back within the same settings folder (e.g. 7.3.x) keeps your settings.
 - New Creality Print releases and Selkies base-image updates arrive as reviewed Renovate PRs. In addition, `latest` is rebuilt weekly without the build cache, so the Debian packages the image adds (e.g. WebKit) pick up security fixes.
+- The image patches one Selkies file so it doesn't wake about 60 times a second while nobody types (`build/patches/`, [docs/research/14](docs/research/14-selkies-idle.md)). If a base-image update changes the patched code, the build fails at the patch step and nothing is published until the patch is updated.
 
 ## Development
 
@@ -200,4 +201,4 @@ After the first publish, the GHCR package is private: make it public in the pack
 
 ## License
 
-The image's own files are provided as-is. Creality Print is © Creality and licensed under [AGPL-3.0](https://github.com/CrealityOfficial/CrealityPrint/blob/master/LICENSE.txt). The image ships the unmodified official AppImage, and the exact upstream release is recorded in the image label `crealityprint.upstream`.
+The image's own files are provided as-is. Creality Print is © Creality and licensed under [AGPL-3.0](https://github.com/CrealityOfficial/CrealityPrint/blob/master/LICENSE.txt). The image ships the unmodified official AppImage, and the exact upstream release is recorded in the image label `crealityprint.upstream`. Selkies is © the Selkies Project and licensed under MPL-2.0; the image patches one of its files, with the patch in [`build/patches/`](build/patches/).

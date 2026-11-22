@@ -47,6 +47,7 @@ jobs:
         run: |
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
             build/fetch-crealityprint.sh \
+            build/patch-selkies.sh \
             tests/smoke.sh \
             tests/run-e2e.sh \
             tests/e2e-summary.sh \
@@ -160,7 +161,7 @@ jobs:
       fail-fast: false
       matrix:
         # One job per spec file. gpu.spec.js needs /dev/dri, which hosted runners don't have.
-        spec: [seed, persistence, transfer, watcher, clipboard, idle, scale]
+        spec: [seed, persistence, transfer, watcher, clipboard, idle, input, scale]
     name: e2e (${{ matrix.spec }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

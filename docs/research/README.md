@@ -93,7 +93,8 @@ Date: 2026-11-21. These are the research findings for building a `linuxserver/do
 | 11 | [11-printer-tests.md](11-printer-tests.md) | Real K1C tests: discovery (bridge/host), add-by-IP, upload, cameras, gstreamer, the heater safety finding, re-create persistence |
 | 12 | [12-remaining-hands-on.md](12-remaining-hands-on.md) | Upload watcher with unsaved work (fixed design), clipboard, drag-and-drop, 29-min stability runs (CPU and GPU) |
 | 13 | [13-idle-quit.md](13-idle-quit.md) | Opt-in "close when idle" (`IDLE_QUIT`): idle CPU baseline, Selkies presence hooks, close/restart design, unsaved-work recovery, watcher interaction, Selkies' own idle cost, tests, measurements |
-| 14 | [14-hidpi-scaling.md](14-hidpi-scaling.md) | Sharp HiDPI UI (`CP_UI_SCALE`): why Selkies' UI Scaling blurs an Xwayland app, the `GDK_SCALE` spike (3D picking, WebKit pages, fractional variants), design |
+| 14 | [14-selkies-idle.md](14-selkies-idle.md) | Selkies' idle key-loop wakeups, the build-time patch that parks them, how the build fails when it no longer applies, measurements |
+| 15 | [15-hidpi-scaling.md](15-hidpi-scaling.md) | Sharp HiDPI UI (`CP_UI_SCALE`): why Selkies' UI Scaling blurs an Xwayland app, the `GDK_SCALE` spike (3D picking, WebKit pages, fractional variants), design |
 
 ## Open questions (need a decision or real hardware)
 
