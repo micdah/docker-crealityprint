@@ -4,6 +4,9 @@
 # that the hooks and svc-crealityprint-idle share (see /usr/local/bin/crealityprint-idle).
 # Runs as root after the base image's init-config and before the Selkies server starts.
 
+# Where s6 keeps the environment that services started with with-contenv (Selkies) get. s6
+# rebuilds it from the container's environment on every start, also after `docker restart`,
+# so hooks this script wrote on an earlier start are never left in it.
 readonly env_dir="/run/s6/container_environment"
 readonly runtime_dir="/run/crealityprint-idle"
 readonly connect_hook="/usr/local/bin/crealityprint-idle connect"
@@ -25,16 +28,11 @@ is_foreign_hook() {
   [ -n "$hook_value" ] && [ "$hook_value" != "$own_hook" ]
 }
 
-# Why: /run isn't a tmpfs in Docker, so a previous start's FIFO and hooks may still be there.
-# Clear them every start, so turning IDLE_QUIT off really turns everything off.
-clear_previous_state() {
+# Why: /run isn't a tmpfs in Docker, so after a `docker restart` the previous start's runtime
+# dir is still there. A leftover quit marker would make the upload watcher skip every upload,
+# and a leftover client state would keep the daemon from arming its timer. Start from scratch.
+clear_previous_runtime_dir() {
   rm -rf "$runtime_dir"
-  if [ "${SELKIES_RUN_AFTER_CONNECT:-}" = "$connect_hook" ]; then
-    rm -f "${env_dir}/SELKIES_RUN_AFTER_CONNECT"
-  fi
-  if [ "${SELKIES_RUN_AFTER_DISCONNECT:-}" = "$disconnect_hook" ]; then
-    rm -f "${env_dir}/SELKIES_RUN_AFTER_DISCONNECT"
-  fi
 }
 
 # Nobody is connected at boot, so the state starts "absent" and the daemon arms its timer.
@@ -96,16 +94,13 @@ install_hooks() {
 }
 
 main() {
-  # Read before clearing: these are the values from the container's environment.
-  local user_connect_hook="${SELKIES_RUN_AFTER_CONNECT:-}"
-  local user_disconnect_hook="${SELKIES_RUN_AFTER_DISCONNECT:-}"
-  clear_previous_state
+  clear_previous_runtime_dir
 
   if ! idle_quit_enabled; then
     return
   fi
-  if is_foreign_hook "$user_connect_hook" "$connect_hook" \
-    || is_foreign_hook "$user_disconnect_hook" "$disconnect_hook"; then
+  if is_foreign_hook "${SELKIES_RUN_AFTER_CONNECT:-}" "$connect_hook" \
+    || is_foreign_hook "${SELKIES_RUN_AFTER_DISCONNECT:-}" "$disconnect_hook"; then
     log "SELKIES_RUN_AFTER_CONNECT or SELKIES_RUN_AFTER_DISCONNECT is already set; IDLE_QUIT stays off so your hooks keep working"
     return
   fi

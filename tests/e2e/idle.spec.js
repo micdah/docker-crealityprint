@@ -3,7 +3,7 @@
 //
 // The close/start behaviour gets one container and one test on purpose: starting a container is
 // the slow part, so it is all checked in sequence, with a short idle timeout and polls that
-// return early. The restarter guard below adds two containers that only boot.
+// return early. The restart and restarter-guard groups below add containers that only boot.
 const fs = require('node:fs');
 const { test, expect } = require('@playwright/test');
 const { AppContainer, poll, writeCubeStl } = require('./lib/app');
@@ -152,4 +152,43 @@ test.describe('close when idle stays off next to an app restarter', () => {
       expect(await app.idleFootprint()).toBe('');
     });
   }
+});
+
+// /run survives `docker restart`, so the previous start's runtime dir is still there when init
+// runs again. Init must start it over: a leftover quit marker would make the upload watcher skip
+// every upload. The hooks need no cleanup: s6 rebuilds its container environment on every start.
+// Init only: the idle timeout is long, so the app is never closed.
+test.describe('close when idle after a docker restart', () => {
+  let app;
+
+  test.afterEach(async ({}, testInfo) => {
+    if (app) {
+      await app.remove(testInfo);
+      app = null;
+    }
+  });
+
+  test('the runtime dir starts over and the hooks are installed again', async () => {
+    app = await AppContainer.start({
+      label: 'idle-restart',
+      env: { IDLE_QUIT: 'true', IDLE_QUIT_AFTER: '3600' },
+    });
+    await app.waitForInit();
+    // What an idle close leaves behind (crealityprint-idle's quit marker).
+    await app.exec('touch /run/crealityprint-idle/quit-for-idle');
+
+    await app.restart();
+    await app.waitForInit();
+
+    const logs = await app.logs();
+    expect(countOccurrences(logs, '[crealityprint-idle] on: ')).toBe(2);
+    expect(logs).not.toContain('IDLE_QUIT stays off');
+    expect(await app.idleFootprint()).toBe(
+      'SELKIES_RUN_AFTER_CONNECT\nSELKIES_RUN_AFTER_DISCONNECT\n/run/crealityprint-idle',
+    );
+    const runtimeFiles = await app.exec('ls /run/crealityprint-idle', { user: 'root' });
+    expect(runtimeFiles.trim().split('\n')).toEqual(['clients', 'events']);
+    const fifoCheck = await app.exec('test -p /run/crealityprint-idle/events && echo fifo', { user: 'root' });
+    expect(fifoCheck.trim()).toBe('fifo');
+  });
 });
