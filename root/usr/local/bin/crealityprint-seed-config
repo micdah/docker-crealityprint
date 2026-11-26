@@ -5,12 +5,14 @@
 # env:   CP_PRINTER  printer model as named in the app, e.g. "Creality K1C" (optional)
 #        CP_NOZZLE   nozzle diameter, default 0.4
 #        CP_REGION   Creality Cloud region, default Europe
-#        CP_DESKTOP  folder for Import/Export dialogs, default $FILE_MANAGER_PATH or /config/Desktop
+#        SELKIES_FILE_MANAGER_PATH, FILE_MANAGER_PATH
+#                    the Selkies upload folder (first one set wins), where the Import/Export
+#                    dialogs should open; default /config/Desktop
 #
 # Why: without CP_PRINTER we only point the file dialogs at the Selkies upload folder and the
 # user gets the app's normal first-run wizard. With CP_PRINTER the wizard is skipped, and the
 # seed MUST carry "models" and "presets": a seed without them leaves an unusable empty printer
-# (docs/research/05, test T6). Preset names come from the printer's own vendor profile, so
+# (docs/research/persistence.md). Preset names come from the printer's own vendor profile, so
 # nothing is hard-coded and an unknown printer falls back to the wizard instead of breaking.
 
 set -euo pipefail
@@ -19,7 +21,7 @@ readonly app_version="${1:?usage: crealityprint-seed-config <app-version>}"
 readonly printer_model="${CP_PRINTER:-}"
 readonly nozzle_diameter="${CP_NOZZLE:-0.4}"
 readonly cloud_region="${CP_REGION:-Europe}"
-readonly desktop_dir="${CP_DESKTOP:-${FILE_MANAGER_PATH:-/config/Desktop}}"
+readonly desktop_dir="${SELKIES_FILE_MANAGER_PATH:-${FILE_MANAGER_PATH:-/config/Desktop}}"
 readonly profiles_dir="/opt/crealityprint/resources/profiles"
 
 warn() {

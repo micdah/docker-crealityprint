@@ -59,7 +59,7 @@ is_true() {
 # - Python Selkies base (today): RESTART_APP=true runs svc-watchdog, which starts the autostart
 #   again about a second after the app exits. The daemon then waits for a browser while the app
 #   runs with nobody connected and the quit marker set, so the app is never closed again and
-#   file-API uploads are skipped (docs/research/13 §3.7). HARDEN_OPENBOX=true turns RESTART_APP
+#   file-API uploads are skipped (docs/research/idle-quit.md). HARDEN_OPENBOX=true turns RESTART_APP
 #   on unless the user set it; init-selkies-config writes that before this init runs (we come
 #   after init-config, which waits for init-selkies-end), so with-contenv gives us the value
 #   the base acts on.

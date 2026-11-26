@@ -26,7 +26,8 @@ module.exports = defineConfig({
       : []),
   ],
   use: {
-    // Small stream: without a GPU the CPU cost grows with the number of streamed pixels.
+    // A small window keeps screenshots and reports small; the stream's size barely changes the
+    // CPU cost (docs/research/gpu.md).
     viewport: { width: 1280, height: 720 },
     deviceScaleFactor: 1,
     ignoreHTTPSErrors: true,

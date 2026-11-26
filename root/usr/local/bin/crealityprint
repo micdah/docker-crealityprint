@@ -4,7 +4,8 @@
 # Why: the base image copies autostart and menu.xml into /config only once, so whatever they
 # call must never change between image versions. Every launch-time fix lives here instead.
 
-# wxWidgets' GL canvas and GTK popups misbehave as native Wayland clients; run on Xwayland.
+# Run on Xwayland, as docker-orcaslicer does: the app has open native-Wayland bugs upstream
+# (docs/research/decisions.md).
 export GDK_BACKEND=x11
 
 # CP_UI_SCALE=2 (or 3, 4) makes GTK draw the whole app, its WebKit pages included, at that
@@ -12,9 +13,9 @@ export GDK_BACKEND=x11
 # an Xwayland window like this one as a bitmap, which comes out blurry. init-crealityprint-config
 # therefore pins Selkies' DPI to 96 (UI Scaling 100 %) unless SELKIES_SCALING_DPI is set, so
 # the desktop has the browser's full device resolution and the app drawing itself larger stays
-# sharp (docs/research/15). Only whole numbers: GTK has no fractional widget scale. An invalid
-# value is reported by init-crealityprint-config and ignored here, with the same check in both
-# places.
+# sharp (docs/research/hidpi.md). Only whole numbers: GTK has no fractional widget scale. An
+# invalid value is reported by init-crealityprint-config and ignored here, with the same check in
+# both places.
 apply_ui_scale() {
   local requested_scale="${CP_UI_SCALE:-}"
   if [[ ! "$requested_scale" =~ ^[1-4]$ ]]; then

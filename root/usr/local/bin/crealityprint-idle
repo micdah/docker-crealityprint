@@ -1,33 +1,17 @@
 #!/bin/bash
 # Close when idle (opt-in, IDLE_QUIT=true): close Creality Print once no browser has been
-# connected for a while, and start it again when a browser connects.
-#
-# usage: see usage() below.
-# env:   IDLE_QUIT_AFTER   seconds without a browser before the app is closed, default 1800
+# connected for IDLE_QUIT_AFTER seconds (default 1800), and start it again when one connects.
+# Design and measurements: docs/research/idle-quit.md.
 #
 # Why this shape:
-# - The app and its WebKit helpers keep using CPU (about 2 % of a core) and over 1 GiB of
-#   memory with nobody watching. Closing the app frees both, and a fresh start also brings back
-#   printer connections such as the K1 camera, which don't survive a long pause.
-# - The app is closed with SIGTERM: it exits at once without asking to save. Unsaved work stays
-#   in the app's own backup (/tmp/crealityprint_model), and the next start offers to restore it.
-# - Only the CrealityPrint process tree is closed. Selkies, labwc and Xwayland keep running:
-#   Selkies has to accept the next connection and stream the desktop.
-# - Selkies runs the hooks (SELKIES_RUN_AFTER_CONNECT/_DISCONNECT, installed by
-#   init-crealityprint-idle) but has no timer. The daemon owns the timer and blocks on a FIFO
-#   with `read -t`, so it adds no wakeups of its own beyond one per idle period.
-# - The daemon, not the connect hook, starts the app again. A hook runs inside Selkies (its
-#   environment, its process tree, killed after 300 s); the daemon is an s6 service, like the
-#   one the upload watcher uses to start the app. The daemon also closed the app itself, so it
-#   never starts a new instance while the old one is still exiting (the new one would hand over
-#   to the dying one over D-Bus and exit).
-# - Only an app this script closed is started again (the quit marker). An app the user closed
-#   stays closed; the desktop's right-click menu starts it.
-# - The state file is the truth about whether a browser is connected; the FIFO only wakes the
-#   daemon. Selkies starts each hook as its own task, so a quick disconnect + reconnect can run
-#   two hooks at once, and the later event's hook may finish first. Each state therefore carries
-#   the hook's spawn order, and an older event never overwrites a newer one (see
-#   write_clients_state).
+# - SIGTERM, no save prompt: the app's own backup offers unsaved work back on the next start.
+# - Only the app's process tree is closed. Selkies must keep running to see the next browser.
+# - The Selkies hooks only record presence and wake the daemon through a FIFO. The daemon owns
+#   the timer (`read -t`, no polling) and is the only one that closes and starts the app, so a
+#   new instance never meets a dying one.
+# - Only an app this script closed comes back (the quit marker); one the user closed stays closed.
+# - Hooks can overlap and finish out of order, so each state carries its hook's spawn order
+#   (see write_clients_state).
 
 set -uo pipefail
 
@@ -44,7 +28,7 @@ readonly notify_timeout_seconds=5
 readonly quit_grace_seconds=10
 readonly kill_grace_seconds=5
 # Never close an app that is still starting: closing the very first start on a fresh /config a
-# few seconds in left a config that the next start reported as corrupt (docs/research/13 §5).
+# few seconds in left a config that the next start reported as corrupt (docs/research/idle-quit.md).
 readonly min_app_age_seconds=60
 readonly app_launcher="/usr/local/bin/crealityprint"
 
@@ -165,10 +149,9 @@ quit_app() {
   log "closed Creality Print and $((${#tree_pids[@]} - 1)) helper processes; it starts again when a browser connects"
 }
 
-# Start the app the way the upload watcher's fallback does: on Xwayland :0, where the session
-# bus is found (the container env says :1). setsid --fork detaches it from this service, so s6
-# never signals it and pid 1 reaps it when it exits. 3<&- keeps the daemon's FIFO descriptor
-# (bash doesn't close it on exec) out of the app and its helpers.
+# Start the app detached, the same way the upload watcher does: on Xwayland :0 (the container
+# env says :1), from $HOME, through setsid --fork so s6 never signals it and pid 1 reaps it.
+# 3<&- keeps the daemon's FIFO descriptor (bash doesn't close it on exec) out of the app.
 start_app() {
   local reason="$1"
   rm -f "$quit_marker"
@@ -348,7 +331,7 @@ start_app_if_browser_returned() {
 
 # Only "disconnect" needs a log line: a connect is logged by start_app when it acts. Either
 # event makes the main loop re-evaluate the state file.
-on_event() {
+log_event() {
   local event="$1"
   local idle_seconds="$2"
   if [ "$event" = "disconnect" ] && app_is_running; then
@@ -376,7 +359,7 @@ run_daemon() {
       read -r -t "$next_wait_seconds" -u 3 event
       read_status=$?
       if [ "$read_status" -eq 0 ]; then
-        on_event "$event" "$idle_seconds"
+        log_event "$event" "$idle_seconds"
         next_wait_seconds="$idle_seconds"
       elif [ "$read_status" -gt 128 ]; then
         on_idle_timeout "$idle_seconds"
@@ -385,7 +368,7 @@ run_daemon() {
       next_wait_seconds="$idle_seconds"
       # Closed by us, or a browser is connected: wait for the next hook without any timer.
       if read -r -u 3 event; then
-        on_event "$event" "$idle_seconds"
+        log_event "$event" "$idle_seconds"
       fi
     fi
   done

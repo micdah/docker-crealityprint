@@ -1,7 +1,7 @@
-// Our Selkies patch (build/patches/selkies-park-idle-key-loops.patch, docs/research/14):
+// Our Selkies patch (build/patches/selkies-park-idle-key-loops.patch, docs/research/base-image.md):
 // Selkies' key loops park while nobody types, and still release a key whose key-up is lost.
-const { test, expect } = require('@playwright/test');
-const { AppContainer, poll } = require('./lib/app');
+const { test, expect } = require('./lib/fixtures');
+const { poll } = require('./lib/app');
 const { openSession } = require('./lib/selkies');
 const { note } = require('./lib/evidence');
 
@@ -58,17 +58,8 @@ async function sendRawClientMessage(page, message) {
 }
 
 test.describe('selkies input loops', () => {
-  let app;
-
-  test.afterEach(async ({}, testInfo) => {
-    if (app) {
-      await app.remove(testInfo);
-      app = null;
-    }
-  });
-
-  test('key loops stay parked while idle and still release a stuck key', async ({ page }, testInfo) => {
-    app = await AppContainer.start({ label: 'input', env: { CP_PRINTER: 'Creality K1C' } });
+  test('key loops stay parked while idle and still release a stuck key', async ({ page, startApp }, testInfo) => {
+    const app = await startApp({ label: 'input', env: { CP_PRINTER: 'Creality K1C' } });
     await app.waitForInit();
     await app.waitForMainWindow();
 

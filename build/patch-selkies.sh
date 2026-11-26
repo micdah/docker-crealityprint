@@ -5,7 +5,7 @@
 #
 # Why: the patches must fail the build, not apply half-way or silently, when a base image
 # update changes the code they touch. git apply allows no fuzz (only line offsets) and applies
-# all hunks of a patch or none. Research: docs/research/14-selkies-idle.md.
+# all hunks of a patch or none. Research: docs/research/base-image.md.
 
 set -euo pipefail
 

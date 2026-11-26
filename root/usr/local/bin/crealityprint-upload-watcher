@@ -1,7 +1,8 @@
 #!/bin/bash
 # Add models uploaded (or dropped) through the Selkies web UI to the running Creality Print.
 #
-# env: FILE_MANAGER_PATH   the Selkies upload folder, default /config/Desktop
+# env: SELKIES_FILE_MANAGER_PATH, FILE_MANAGER_PATH
+#                          the Selkies upload folder (first one set wins), default /config/Desktop
 #      AUTO_OPEN_PATTERN   regex of file names to open, default: mesh formats only
 #
 # Why this shape:
@@ -12,9 +13,8 @@
 #   current plate and unsaved work survives. 3MF is left out by default because it replaces
 #   the project (the app asks first, but it's more intrusive).
 
-readonly watch_dir="${FILE_MANAGER_PATH:-/config/Desktop}"
-# The app is on Xwayland :0 (the container env says :1); the session bus and the fallback
-# app launch both need that display.
+readonly watch_dir="${SELKIES_FILE_MANAGER_PATH:-${FILE_MANAGER_PATH:-/config/Desktop}}"
+# The app's Xwayland display; the container env says :1 (docs/research/base-image.md).
 export DISPLAY=:0
 readonly model_pattern="${AUTO_OPEN_PATTERN:-\.(stl|obj|step|stp|amf|ply|oltp)$}"
 
@@ -68,7 +68,12 @@ open_in_app() {
   fi
 
   log "no running app found, starting it with ${file_path}"
-  DISPLAY=:0 /usr/local/bin/crealityprint "$file_path" > /dev/null 2>&1 &
+  # Detached, the same way crealityprint-idle starts it: s6 never signals it with this service,
+  # and pid 1 reaps it.
+  (
+    cd "${HOME:-/config}" || exit 1
+    setsid --fork /usr/local/bin/crealityprint "$file_path" > /dev/null 2>&1 < /dev/null
+  )
 }
 
 # Case-insensitive, so ".STL" matches and a user pattern may use either case.

@@ -5,8 +5,8 @@
 // the slow part, so it is all checked in sequence, with a short idle timeout and polls that
 // return early. The restart and restarter-guard groups below add containers that only boot.
 const fs = require('node:fs');
-const { test, expect } = require('@playwright/test');
-const { AppContainer, poll, writeCubeStl } = require('./lib/app');
+const { test, expect } = require('./lib/fixtures');
+const { poll, writeCubeStl } = require('./lib/app');
 const { openSession, uploadViaApi } = require('./lib/selkies');
 const { snap } = require('./lib/evidence');
 
@@ -47,24 +47,15 @@ async function waitForNoAppProcesses(app, description) {
 
 // Connect and wait until the idle daemon has started the app and its main window is up.
 async function connectAndWaitForApp(app, page, startedCount) {
-  app.markerBaseline = app.countMainWindowMarkers();
+  app.resetMainWindowBaseline();
   await openSession(page, app.httpsUrl);
   await waitForLogCount(app, 'the app to be started on connect', STARTED_LOG, startedCount);
   await app.waitForMainWindow();
 }
 
 test.describe('close when idle', () => {
-  let app;
-
-  test.afterEach(async ({}, testInfo) => {
-    if (app) {
-      await app.remove(testInfo);
-      app = null;
-    }
-  });
-
-  test('the app closes without a browser, ignores uploads while closed and starts again on connect', async ({ page }, testInfo) => {
-    app = await AppContainer.start({
+  test('the app closes without a browser, ignores uploads while closed and starts again on connect', async ({ page, startApp }, testInfo) => {
+    const app = await startApp({
       label: 'idle',
       env: {
         IDLE_QUIT: 'true',
@@ -125,22 +116,13 @@ test.describe('close when idle', () => {
 // starts the app again right after an idle close, so init keeps the feature off and says why.
 // Init only: no app, no browser.
 test.describe('close when idle stays off next to an app restarter', () => {
-  let app;
-
-  test.afterEach(async ({}, testInfo) => {
-    if (app) {
-      await app.remove(testInfo);
-      app = null;
-    }
-  });
-
   const cases = [
     { setting: 'RESTART_APP=true', env: { RESTART_APP: 'true' }, hint: false },
     { setting: 'HARDEN_OPENBOX=true', env: { HARDEN_OPENBOX: 'true' }, hint: true },
   ];
   for (const { setting, env, hint } of cases) {
-    test(`with ${setting}, IDLE_QUIT logs why and installs nothing`, async () => {
-      app = await AppContainer.start({
+    test(`with ${setting}, IDLE_QUIT logs why and installs nothing`, async ({ startApp }) => {
+      const app = await startApp({
         label: 'idle-restarter',
         env: { IDLE_QUIT: 'true', IDLE_QUIT_AFTER: String(IDLE_SECONDS), ...env },
       });
@@ -159,17 +141,8 @@ test.describe('close when idle stays off next to an app restarter', () => {
 // every upload. The hooks need no cleanup: s6 rebuilds its container environment on every start.
 // Init only: the idle timeout is long, so the app is never closed.
 test.describe('close when idle after a docker restart', () => {
-  let app;
-
-  test.afterEach(async ({}, testInfo) => {
-    if (app) {
-      await app.remove(testInfo);
-      app = null;
-    }
-  });
-
-  test('the runtime dir starts over and the hooks are installed again', async () => {
-    app = await AppContainer.start({
+  test('the runtime dir starts over and the hooks are installed again', async ({ startApp }) => {
+    const app = await startApp({
       label: 'idle-restart',
       env: { IDLE_QUIT: 'true', IDLE_QUIT_AFTER: '3600' },
     });

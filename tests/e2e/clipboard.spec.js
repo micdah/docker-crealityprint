@@ -1,23 +1,14 @@
 // Text clipboard between the browser and the remote session (requires HTTPS).
-const { test, expect } = require('@playwright/test');
-const { AppContainer, poll } = require('./lib/app');
-const { openSession, openSidebar, focusStream } = require('./lib/selkies');
+const { test, expect } = require('./lib/fixtures');
+const { poll } = require('./lib/app');
+const { openSession, openSidebarSection, focusStream } = require('./lib/selkies');
 const { snap, note } = require('./lib/evidence');
 
 const SESSION_ENV = { DISPLAY: ':0' };
 
 test.describe('clipboard', () => {
-  let app;
-
-  test.afterEach(async ({}, testInfo) => {
-    if (app) {
-      await app.remove(testInfo);
-      app = null;
-    }
-  });
-
-  test('text goes browser to session and session to browser', async ({ page, context }, testInfo) => {
-    app = await AppContainer.start({ label: 'clipboard', env: { CP_PRINTER: 'Creality K1C' } });
+  test('text goes browser to session and session to browser', async ({ page, context, startApp }, testInfo) => {
+    const app = await startApp({ label: 'clipboard', env: { CP_PRINTER: 'Creality K1C' } });
     await app.waitForInit();
     await app.waitForMainWindow();
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: app.httpsUrl });
@@ -53,12 +44,8 @@ test.describe('clipboard', () => {
     );
 
     // The sidebar's Clipboard section shows what the browser received from the session.
-    await openSidebar(page);
-    const clipboardHeader = page.locator('button.sidebar-section-header[title="Clipboard"]');
-    if ((await clipboardHeader.getAttribute('aria-expanded')) !== 'true') {
-      await clipboardHeader.click();
-    }
-    await expect(page.locator('#clipboard-content textarea, textarea').first()).toHaveValue('crp-e2e-out');
+    await openSidebarSection(page, 'Clipboard');
+    await expect(page.locator('#clipboard-content textarea')).toHaveValue('crp-e2e-out');
     await snap(page, testInfo, 'Sidebar Clipboard section shows "crp-e2e-out", copied from the session to the browser');
   });
 });

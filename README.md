@@ -8,7 +8,7 @@ A Docker image that runs [Creality Print](https://github.com/CrealityOfficial/Cr
 ## Quick start
 
 ```yaml
-# docker-compose.yml (see docker-compose.example.yml for every option)
+# docker-compose.yml (see docker-compose.example.yml for more options)
 services:
   crealityprint:
     image: ghcr.io/micdah/docker-crealityprint:latest
@@ -37,16 +37,16 @@ Pass the GPU with `--device /dev/dri:/dev/dri` (compose: `devices: [/dev/dri:/de
 - it renders Creality Print's 3D view in OpenGL;
 - it encodes the video stream to the browser in hardware (VA-API).
 
-Container CPU use while rotating a model, measured on an Intel UHD 630:
+Rotating a large model (640,000 triangles), measured on an Intel UHD 630:
 
 | Browser stream | With GPU | Without GPU |
 |---|---|---|
-| 1600×900 | ~0.65 cores | ~2.5 cores |
-| 3200×1800 (HiDPI laptop) | ~0.6 cores | ~7 cores |
+| 1600×900 | ~0.65 cores, ~54 frames/s | ~3.1 cores, ~14 frames/s |
+| 3200×1800 (HiDPI laptop) | ~0.55 cores, ~56 frames/s | ~3.3 cores, ~12 frames/s |
 
-Without a GPU everything still works, using software rendering. The cost then grows with the size of the browser window. Plan for about 2 GiB RAM per container.
+Without a GPU everything still works, using software rendering, but big models turn sluggishly. A HiDPI browser hardly changes the cost, unless you also set `CP_UI_SCALE` (see below). Plan for about 2 GiB RAM per container.
 
-NVIDIA and AMD GPUs are untested. NVIDIA needs the NVIDIA container toolkit and host driver 580+ (see [docs/research/04](docs/research/04-gpu-acceleration.md)). Don't add `vainfo` to a derived image: on some Intel GPUs it switches the video driver and the stream goes black.
+NVIDIA and AMD GPUs are untested. NVIDIA needs the NVIDIA container toolkit and host driver 580+ (see [docs/research/gpu.md](docs/research/gpu.md)). Don't add `vainfo` to a derived image: on some Intel GPUs it switches the video driver and the stream goes black.
 
 ## Your settings are kept
 
@@ -57,7 +57,7 @@ Everything lives in the `/config` volume:
 
 Restarting, re-creating or upgrading the container keeps them all. When Creality moves to a new settings folder (as with 7.0 → 7.3), the app migrates your settings itself. Changing `PUID`/`PGID` on an existing `/config` is handled: the image re-owns the app and desktop state at startup. (The upload folder is only re-owned at its top level, so a NAS share mounted inside it is never touched.)
 
-Back up by copying the `config` folder while the container is stopped. The only state outside `/config` is the app's crash-recovery copy of an *unsaved* project (in `/tmp`), so save your projects.
+Back up by copying the `config` folder while the container is stopped. The only state outside `/config` is the app's crash-recovery copy of an *unsaved* project (in `/tmp`). A re-create deletes it, and after a container restart the app often doesn't offer it, so save your projects.
 
 ### First run
 
@@ -73,8 +73,9 @@ The app runs on the server, so its "Open file" dialog **cannot** see your laptop
 
 - **Upload Files** opens your browser's file picker. You can also **drag files onto the page**. Uploads land in **`/config/Desktop`**, which is where Creality Print's Import dialog opens.
 - **Download Files** lists that folder, with a download button per file. Export G-code or 3MF into `/config/Desktop` to fetch it.
+- **Saving a project** (Ctrl+S) opens in the app's own log folder, not `/config/Desktop`. Click *Desktop* in the dialog (or type `/config/Desktop/<name>.3mf`), or the Files panel won't see it.
 - **NAS / file server:** mount a share below the upload folder, e.g. `-v /mnt/nas/3d:/config/Desktop/nas`. It then shows up in both the Files panel and the app.
-- **Auto-open uploads:** with `AUTO_OPEN_UPLOADS=true`, every uploaded or dropped model is added to the open plate about a second later.
+- **Auto-open uploads:** with `AUTO_OPEN_UPLOADS=true`, every uploaded or dropped model is added to the open plate about two seconds later.
   - Unsaved work is kept, and 3MF projects aren't auto-opened by default.
   - New models land at the bed centre, so press **Arrange** afterwards.
   - `AUTO_OPEN_PATTERN` (a regex) changes which files are opened.
@@ -91,7 +92,7 @@ Tested with a Creality K1C over Docker's default (bridge) network:
 - live status, sending G-code, and the camera (MJPEG and WebRTC) all work;
 - give the printer a fixed IP (DHCP reservation), because it is stored by IP.
 
-**Automatic discovery** uses mDNS, which Docker's bridge network doesn't forward. With `network_mode: host` it can work, but a host firewall (ufw/firewalld) still drops the printer's replies. In that case allow them, e.g. `ufw allow proto udp from 192.168.1.0/24 port 5353`. This setup is unverified.
+**Automatic discovery** uses mDNS, which Docker's bridge network doesn't forward. With `network_mode: host` (which linuxserver calls "may work, not supported") it can work, but a host firewall (ufw/firewalld) still drops the printer's replies. In that case allow them, e.g. `ufw allow proto udp from 192.168.1.0/24 port 5353`. This setup is unverified.
 
 > **Careful when testing.** Starting *any* print on a Creality OS printer (K1/K2 series) makes the printer run its own heat-and-home routine, even for a file with no heating commands. A file without end G-code can leave the heaters on. To check the connection, use **Send Only** (upload without printing).
 
@@ -108,23 +109,23 @@ Set `CP_UI_SCALE=2` instead:
 - If you set `SELKIES_SCALING_DPI` yourself, the image keeps your value, but anything other than `96` brings the blur back.
 - The setting is per container. Every browser gets the same scale, so on a normal (non-HiDPI) monitor the UI also looks twice as big. On a 150 % screen, `2` comes out about a third larger than usual, and still sharp.
 - At 2x the app has as much room as your browser window measures in CSS pixels (a 4K screen at 200 % is 1920×1080). Below about 1600×900 its panels get cramped and overlap, so use a large or full-screen window.
-- **CPU:** the app now really draws at your screen's full resolution. With a GPU (`/dev/dri`) that costs nothing extra (about half a core to one core while you turn the 3D view). Without one, turning the 3D view costs about 4–7 cores instead of about 2.5 (tested at 3200×1800 with a 640k-triangle model on a 16-core host).
+- **CPU:** the app now really draws at your screen's full resolution. With a GPU (`/dev/dri`) that costs nothing extra (about half a core to one core while you turn the 3D view). Without one, turning a large model costs roughly twice as much as without `CP_UI_SCALE`: about 4–7 cores instead of about 2.5 in the same test (3200×1800, a 640k-triangle model, a 16-thread host).
 - The 3D view may start zoomed far out, with a tiny plate. Zoom in with the mouse wheel.
 - It applies when the app starts. After changing it, re-create the container (e.g. `docker compose up -d`); a plain restart keeps the old value.
 - The container log confirms it with a line starting `[crealityprint-init] UI scale`.
 - Text a bit too large at 2? Add `GDK_DPI_SCALE=0.85` (text only, icons stay 2x).
 
-Why Selkies' scaling blurs this app, why the image fixes Selkies' DPI, and what was tested, is in [docs/research/15](docs/research/15-hidpi-scaling.md).
+Why Selkies' scaling blurs this app, why the image fixes Selkies' DPI, and what was tested, is in [docs/research/hidpi.md](docs/research/hidpi.md).
 
 ## Close when idle (optional)
 
-If the server runs all the time but you only open the app now and then, you can let the container close the app while nobody is connected. Even with no browser tab open, the running app keeps using CPU (the container sits at about 2–3 % of one core), keeps waking the CPU so it can't stay in its deepest power-saving states, and holds over 1 GiB of memory.
+If the server runs all the time but you only open the app now and then, you can let the container close the app while nobody is connected. Even with no browser tab open, the running app keeps using CPU (the container sits at about 1.5 % of one core), keeps waking the CPU so it can't stay in its deepest power-saving states, and holds over 1 GiB of memory.
 
 Turn it on with `IDLE_QUIT=true`. Once no browser tab has been connected for `IDLE_QUIT_AFTER` seconds (default `1800`, 30 minutes), Creality Print is closed:
 - **Closed:** Creality Print and its child processes (the WebKit helpers). There is no "save changes?" prompt.
 - **Still running:** Selkies and the desktop (Xwayland, labwc), so the next browser tab can connect.
 - **Coming back:** when a browser tab connects, the app starts again by itself. It takes a few seconds and opens with an empty plate.
-- **Unsaved work:** the app keeps its own backup of an unsaved project. On the next start it asks "Previously unsaved items have been detected. Do you want to restore them?"; choose **Yes** to get your plate back. The backup lives in the container's `/tmp`, so it survives a restart of the container but not a re-create. Save your project to keep it for sure.
+- **Unsaved work:** the app keeps its own backup of an unsaved project. On the next start it asks "Previously unsaved items have been detected. Do you want to restore them?"; choose **Yes** to get your plate back, then click once into the 3D view (until then the app keeps redrawing and uses a lot of CPU). The backup is only reliable while the container keeps running, so save your project to keep it for sure.
 - The timer also starts when the container starts, because nobody is connected then.
 - Only an app closed by the timer comes back by itself. If you close the app yourself, start it again from the desktop's right-click menu.
 - "Connected" means a Selkies session is open: a browser tab you forgot in the background keeps the app running.
@@ -132,15 +133,15 @@ Turn it on with `IDLE_QUIT=true`. Once no browser tab has been connected for `ID
 When the app is closed:
 - Anything it was still doing stops: a slice, or sending G-code to a printer. A print already running on the printer carries on.
 - Printer connections drop, and connect again when the app starts. That includes the printer camera (WebRTC, e.g. K1 series).
-- With `AUTO_OPEN_UPLOADS=true`, a file uploaded through the file API with no tab open (e.g. with `curl`) isn't opened, and doesn't start the app. It stays in `/config/Desktop`, so import it after you reconnect. Uploads from the browser sidebar always have a tab open, so they are opened as usual.
+- With `AUTO_OPEN_UPLOADS=true`, a file uploaded through the file API with no tab open (e.g. with `curl`) isn't opened, and doesn't start the app. It stays in the upload folder, so import it after you reconnect. Uploads from the browser sidebar always have a tab open, so they are opened as usual.
 
 | No browser connected | App running | App closed |
 |---|---|---|
-| Whole container, CPU | ~3 % of a core | ~1 % of a core |
-| Context switches (≈ CPU wakeups) | ~114/s | ~70/s |
+| Whole container, CPU | ~1.5 % of a core | under 0.1 % of a core |
+| Context switches (≈ CPU wakeups) | ~50/s | ~8/s |
 | Memory | ~1.4 GiB | ~160 MiB |
 
-Selkies keeps running while the app is closed (about 0.7 % of a core). The log shows each step on lines starting with `[crealityprint-idle]`. If you already use `SELKIES_RUN_AFTER_CONNECT` or `SELKIES_RUN_AFTER_DISCONNECT`, the feature stays off and logs a warning, because it needs those two hooks. It also stays off, with a warning, next to the base image's app restarter: `RESTART_APP=true`, which `HARDEN_OPENBOX=true` turns on too. The restarter would start the app again right after every idle close, and it would then keep running with nobody connected. With `HARDEN_OPENBOX=true`, set `RESTART_APP=false` to use `IDLE_QUIT`. Details are in [docs/research/13](docs/research/13-idle-quit.md).
+The log shows each step on lines starting with `[crealityprint-idle]`. If you already use `SELKIES_RUN_AFTER_CONNECT` or `SELKIES_RUN_AFTER_DISCONNECT`, the feature stays off and logs a warning, because it needs those two hooks. It also stays off, with a warning, next to the base image's app restarter: `RESTART_APP=true`, which `HARDEN_OPENBOX=true` turns on too. The restarter would start the app again right after every idle close, and it would then keep running with nobody connected. With `HARDEN_OPENBOX=true`, set `RESTART_APP=false` to use `IDLE_QUIT`. Details are in [docs/research/idle-quit.md](docs/research/idle-quit.md).
 
 ## Environment variables
 
@@ -158,17 +159,19 @@ Selkies keeps running while the app is closed (about 0.7 % of a core). The log s
 | `IDLE_QUIT_AFTER` | `1800` | Seconds with no browser connected before the app is closed |
 | `PASSWORD`, `CUSTOM_USER` | – | Basic-auth login for the UI and file API |
 | `SELKIES_FILE_TRANSFERS` | `upload,download` | `none` disables browser file transfer |
-| `SELKIES_AUDIO_ENABLED` | `false` (image default) | Sound from the app to the browser. Off because Creality Print needs none, and streaming it costs about 3 % of a core while a browser is connected. `true` turns it back on (and with it the microphone) |
-| `FILE_MANAGER_PATH` | `/config/Desktop` | Upload/download folder (also where the app's Import/Export dialogs open on first run) |
+| `SELKIES_AUDIO_ENABLED` | `false` (image default) | Sound from the app to the browser. Off because Creality Print needs none, and streaming it costs a few % of a core while a browser is connected. `true` turns it back on |
+| `FILE_MANAGER_PATH` | `/config/Desktop` | Upload/download folder (also where the app's Import/Export dialogs open on first run). `SELKIES_FILE_MANAGER_PATH` works too and wins if both are set |
+
+`AUTO_OPEN_UPLOADS` and `IDLE_QUIT` need the image's default Wayland mode, so don't set `PIXELFLUX_WAYLAND=false`.
 
 The rest of the Selkies/linuxserver options (`CUSTOM_PORT`, `CUSTOM_HTTPS_PORT`, `SELKIES_*`, …) work as described in the [Selkies base image docs](https://docs.linuxserver.io/images/docker-baseimage-selkies/).
 
 ## Versions and updates
 
-- `:latest` is the newest Creality Print release on GitHub with a plain `vX.Y.Z` tag. That **includes releases GitHub flags as prerelease**, because creality.com offers those as the current download.
+- `:latest` is the newest Creality Print release merged into `master`. Every plain `vX.Y.Z` release on GitHub arrives as its own reviewed Renovate PR, **including releases GitHub flags as prerelease**, because creality.com offers those as the current download.
 - Every build is also tagged `:<version>` (e.g. `:7.3.2`) and `:<version>-r<build>`. Pin one of those to control upgrades. Rolling back within the same settings folder (e.g. 7.3.x) keeps your settings.
-- New Creality Print releases and Selkies base-image updates arrive as reviewed Renovate PRs, each in a PR of their own. In addition, `latest` is rebuilt weekly without the build cache, so the Debian packages the image adds (e.g. WebKit) pick up security fixes.
-- The image patches one Selkies file so it doesn't wake about 60 times a second while nobody types (`build/patches/`, [docs/research/14](docs/research/14-selkies-idle.md)). If a base-image update changes the patched code, the build fails at the patch step and nothing is published until the patch is updated.
+- Selkies base-image updates also arrive as reviewed Renovate PRs, in a weekly PR of their own. `latest` is rebuilt weekly without the build cache, so the Debian packages the image adds (e.g. WebKit) pick up security fixes.
+- The image patches one Selkies file so it doesn't wake about 60 times a second while nobody types (`build/patches/`, [docs/research/base-image.md](docs/research/base-image.md)). If a base-image update changes the patched code, the build fails at the patch step and nothing is published until the patch is updated.
 
 ## Development
 
@@ -180,7 +183,7 @@ tests/run-e2e.sh crealityprint:dev --spec watcher   # one spec
 tests/run-e2e.sh crealityprint:dev --app-cpus 4 --workers 1   # mimic a CI runner
 ```
 
-The e2e specs start their own containers via the Docker socket and never touch a printer. Each visible check takes a named screenshot of what it verified, e.g. "After uploading e2e watch.stl: the 40 mm cube is on the plate". They are shown inline in the HTML report (`e2e-artifacts/report/index.html`) and saved as numbered files in `e2e-artifacts/screenshots/<spec>/`.
+The e2e specs start their own containers via the Docker socket and never touch a printer. Each visible check takes a named screenshot of what it verified, e.g. *After uploading "e2e watch.stl": the 40 mm cube is on the plate, same window*. They are shown inline in the HTML report (`e2e-artifacts/report/index.html`) and saved as numbered files in `e2e-artifacts/screenshots/<spec>/`.
 
 **CI** (`.github/workflows/build.yml`) runs on every PR:
 - lint and one image build, in parallel;
@@ -189,7 +192,8 @@ The e2e specs start their own containers via the Docker socket and never touch a
 
 PRs can be reviewed without checking them out:
 - Each run's job summary lists the test results.
-- A `report` job merges the per-spec reports into one HTML report with every screenshot inline. It publishes the report to GitHub Pages (`https://<owner>.github.io/<repo>/pr-<number>/`). A `comment` job then links it in a sticky PR comment that is updated on every run and names the commit it describes, also when no report could be published. The comment also embeds the watcher spec's screenshot of the app with a model loaded on the plate, as a quick smoke check that the app started and renders; open the full report only when that looks wrong. Pushes to `master` publish to `…/master/`.
+- A `report` job merges the per-spec reports into one HTML report, with every screenshot inline, and publishes it to GitHub Pages: `https://<owner>.github.io/<repo>/pr-<number>/`, or `…/master/` for `master`.
+- A `comment` job links the report in a sticky PR comment, updated on every run. The comment shows the watcher spec's screenshot of the app with a model loaded, as a quick check that the app starts and renders.
 - A PR's report is removed when it closes. A weekly cleanup also prunes reports of closed PRs and squashes the `gh-pages` history to one commit, so it doesn't grow. Fork PRs don't get a published report.
 - The artifacts also hold the raw report, screenshots and logs.
 
@@ -197,10 +201,10 @@ One-time setup: after the first run has created the `gh-pages` branch, enable Pa
 
 After the first publish, the GHCR package is private: make it public in the package settings if others should pull it.
 
-**Updates** come as [Renovate](https://github.com/apps/renovate) PRs. Install the free Renovate GitHub App on the repository. It proposes:
-- new Creality Print releases, as soon as they appear (label `crealityprint-update`);
-- base-image digest bumps, once a week in their own PR (label `base-image-update`), so a bump that fails the build doesn't hold up the rest;
-- Playwright, Docker CLI and GitHub Actions updates, grouped into one weekly "tooling updates" PR.
+**Updates:** install the free [Renovate GitHub App](https://github.com/apps/renovate) on the repository. It opens:
+- a PR for each Creality Print release, as soon as it appears (label `crealityprint-update`);
+- a weekly PR for the base-image digest (label `base-image-update`), so a bump that fails the build doesn't hold up the rest;
+- one weekly "tooling updates" PR for GitHub Actions, Playwright, the Docker CLI and the lint tools.
 
 ## License
 

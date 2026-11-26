@@ -13,6 +13,14 @@
         "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)\\nARG CREALITYPRINT_VERSION=(?<currentValue>v[0-9.]+)"
       ],
       "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "Tool images the workflows run with docker run, declared as *_VERSION env vars under a `# renovate:` comment",
+      "managerFilePatterns": ["/(^|/)\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)\\n\\s+[A-Z_]+_VERSION: \"(?<currentValue>[^\"]+)\""
+      ]
     }
   ],
   "packageRules": [
@@ -26,7 +34,7 @@
       "schedule": ["before 6am on monday"]
     },
     {
-      "description": "The Selkies base image gets its own weekly PR, on the tooling schedule: a base bump can fail the build on purpose (build/patch-selkies.sh, docs/research/14 §4, or the move to the Rust Selkies), and must not block the other tooling updates.",
+      "description": "The Selkies base image gets its own weekly PR, on the tooling schedule: a base bump can fail the build on purpose (build/patch-selkies.sh, or the move to the Rust Selkies; docs/research/selkies-rust.md), and must not block the other tooling updates.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["ghcr.io/linuxserver/baseimage-selkies"],
       "groupName": "Selkies base image",
@@ -34,7 +42,7 @@
       "labels": ["base-image-update"]
     },
     {
-      "description": "Creality Print releases get their own PR as soon as they appear: that's the update users notice. Track every plain vX.Y.Z release, including ones GitHub flags as prerelease (creality.com distributes those as current; docs/research). Suffixed tags (-Beta, -rc) are excluded.",
+      "description": "Creality Print releases get their own PR as soon as they appear: that's the update users notice. Track every plain vX.Y.Z release, including ones GitHub flags as prerelease (creality.com distributes those as current; docs/research/decisions.md). Suffixed tags (-Beta, -rc) are excluded.",
       "matchDepNames": ["CrealityOfficial/CrealityPrint"],
       "groupName": null,
       "schedule": ["at any time"],

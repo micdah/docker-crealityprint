@@ -1,11 +1,6 @@
 #!/bin/bash
 # Run the Playwright e2e suite against an image, locally or in CI.
 #
-# usage: tests/run-e2e.sh <image> [--spec <name>]... [--workers <n>] [--app-cpus <n>]
-#   --spec      run only tests/e2e/<name>.spec.js (repeatable; default: all specs)
-#   --workers   spec files run in parallel (default 2; CI matrix jobs use 1)
-#   --app-cpus  limit each app container's CPUs, e.g. 4 to mimic a CI runner
-#
 # Why this shape: specs start their own app containers through the host's Docker socket, so
 # Playwright runs in a runner image with the Docker CLI. Config dirs live under a work dir
 # mounted at the same path in the runner, so bind mounts the specs create resolve on the host.
@@ -29,7 +24,15 @@ log() {
 }
 
 usage() {
-  sed -n '3,7p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  cat >&2 << 'EOF'
+usage: tests/run-e2e.sh <image> [--spec <name>]... [--workers <n>] [--app-cpus <n>]
+  --spec      run only tests/e2e/<name>.spec.js (repeatable; default: all specs)
+  --workers   spec files run in parallel (default 2; CI matrix jobs use 1)
+  --app-cpus  limit each app container's CPUs, e.g. 4 to mimic a CI runner
+env:
+  E2E_ARTIFACTS_DIR  reports and screenshots (default <repo>/e2e-artifacts)
+  E2E_WORK_ROOT      parent of the per-run work dir with the app configs (default <repo>/.e2e-work)
+EOF
   exit 2
 }
 
@@ -130,7 +133,7 @@ main() {
   mkdir -p "$work_dir" "$artifacts_dir"
   # Screenshots are written by the specs themselves; drop the previous run's files, including
   # the PR comment screenshot, so a failed run never leaves an old one behind.
-  rm -rf "${artifacts_dir}/screenshots" "${artifacts_dir}/smoke"
+  rm -rf "${artifacts_dir}/screenshots" "${artifacts_dir}/app-screenshot"
   trap cleanup EXIT
 
   build_runner_image
