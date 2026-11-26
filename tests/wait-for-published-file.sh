@@ -1,9 +1,6 @@
 #!/bin/bash
 # Wait until a URL serves exactly the same bytes as a local file.
 #
-# usage: tests/wait-for-published-file.sh <url> <local-file> [timeout-seconds]
-#   timeout-seconds   default 300; exit 1 when the URL still doesn't match by then
-#
 # Why: the CI report job pushes to gh-pages and then posts a PR comment that embeds an image
 # from GitHub Pages. Pages needs a minute or so to deploy; if the comment goes out earlier,
 # GitHub's image proxy fetches the previous image (or a 404) instead of this run's.
@@ -22,7 +19,10 @@ log() {
 }
 
 usage() {
-  sed -n '4,5p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  cat >&2 << 'EOF'
+usage: tests/wait-for-published-file.sh <url> <local-file> [timeout-seconds]
+  timeout-seconds   default 300; exit 1 when the URL still doesn't match by then
+EOF
   exit 2
 }
 
@@ -56,13 +56,13 @@ cache_busting_url() {
   echo "${url}${separator}poll=${attempt}-$(date +%s)"
 }
 
-# true when this attempt downloaded the expected bytes; a 404 or network error is just "not yet".
+# Succeeds when this attempt downloaded the expected bytes; a 404 or network error is just
+# "not yet".
 published_file_matches() {
   local attempt="$1"
   local expected_checksum="$2"
-  local matches=false
   # Time-limited, so one stalled connection can't hang the loop past its deadline.
-  if curl \
+  if ! curl \
       --silent \
       --fail \
       --location \
@@ -70,11 +70,9 @@ published_file_matches() {
       --max-time 30 \
       --output "$download_file" \
       "$(cache_busting_url "$attempt")"; then
-    if [ "$(file_checksum "$download_file")" = "$expected_checksum" ]; then
-      matches=true
-    fi
+    return 1
   fi
-  echo "$matches"
+  [ "$(file_checksum "$download_file")" = "$expected_checksum" ]
 }
 
 cleanup() {
@@ -93,7 +91,7 @@ main() {
 
   log "waiting up to ${timeout_seconds}s for ${url} to match ${local_file}"
   while true; do
-    if [ "$(published_file_matches "$attempt" "$expected_checksum")" = true ]; then
+    if published_file_matches "$attempt" "$expected_checksum"; then
       log "${url} is published (attempt ${attempt})"
       exit 0
     fi

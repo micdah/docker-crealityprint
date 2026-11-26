@@ -1,7 +1,7 @@
 Park Selkies' two key-handling loops while no key or gamepad is held.
 
 Applied at build time by build/patch-selkies.sh; the build fails if any hunk doesn't apply
-exactly (git apply: no fuzz, only line offsets). Research: docs/research/14-selkies-idle.md.
+exactly (git apply: no fuzz, only line offsets). Research: docs/research/base-image.md.
 
 Why: WebRTCInput._key_stale_sweep (every 100 ms) and _key_repeat_loop (every 20 ms) start
 with the server and poll forever, connected or not: about 60 of the container's ~68 idle

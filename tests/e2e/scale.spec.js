@@ -1,20 +1,11 @@
 // CP_UI_SCALE: the launcher draws the app at a whole-number GTK scale, and init pins Selkies'
 // DPI to 96 so the desktop keeps the browser's full device resolution; init logs the result.
-const { test, expect } = require('@playwright/test');
-const { AppContainer, poll } = require('./lib/app');
-const { openSession, openSidebar } = require('./lib/selkies');
+const { test, expect } = require('./lib/fixtures');
+const { poll } = require('./lib/app');
+const { openSession, openSidebarSection } = require('./lib/selkies');
 const { snap } = require('./lib/evidence');
 
 const DPI_FILE = '/run/s6/container_environment/SELKIES_SCALING_DPI';
-
-// Expand the sidebar's Screen Settings section, where UI Scaling would be.
-async function openScreenSettings(page) {
-  await openSidebar(page);
-  const header = page.locator('button.sidebar-section-header[title="Screen Settings"]');
-  if ((await header.getAttribute('aria-expanded')) !== 'true') {
-    await header.click();
-  }
-}
 
 test.describe('HiDPI UI scale', () => {
   // A fresh HiDPI client, as a new browser or device would connect: its Selkies client asks for
@@ -22,17 +13,8 @@ test.describe('HiDPI UI scale', () => {
   // 1600x900 CSS px is about the least room the app needs at 2x.
   test.use({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 2 });
 
-  let app;
-
-  test.afterEach(async ({}, testInfo) => {
-    if (app) {
-      await app.remove(testInfo);
-      app = null;
-    }
-  });
-
-  test('CP_UI_SCALE=2 draws the app at 2x on the full-resolution desktop', async ({ page }, testInfo) => {
-    app = await AppContainer.start({
+  test('CP_UI_SCALE=2 draws the app at 2x on the full-resolution desktop', async ({ page, startApp }, testInfo) => {
+    const app = await startApp({
       label: 'scale-2',
       env: { CP_UI_SCALE: '2', CP_PRINTER: 'Creality K1C' },
     });
@@ -59,7 +41,7 @@ test.describe('HiDPI UI scale', () => {
     // Selkies hides UI Scaling once the operator fixed the DPI; the rest of the section stays.
     // Both the select's id and its label are checked, so a renamed id in a base-image update
     // can't make this pass by matching nothing.
-    await openScreenSettings(page);
+    await openSidebarSection(page, 'Screen Settings');
     await page.getByText('HiDPI (Pixel Perfect)').first().waitFor({ state: 'visible' });
     expect(await page.locator('#uiScalingSelect').count()).toBe(0);
     expect(await page.getByText('UI Scaling', { exact: true }).count()).toBe(0);
@@ -68,8 +50,8 @@ test.describe('HiDPI UI scale', () => {
   // /run survives `docker restart`, but s6 rebuilds its container_environment from the
   // container's environment on every start. So the 96 of the first start must not reach the
   // second one, where the init would take it for the user's own value and only keep it.
-  test('after a restart the image sets the DPI again, not as the user\'s', async () => {
-    app = await AppContainer.start({ label: 'scale-restart', env: { CP_UI_SCALE: '2' } });
+  test('after a restart the image sets the DPI again, not as the user\'s', async ({ startApp }) => {
+    const app = await startApp({ label: 'scale-restart', env: { CP_UI_SCALE: '2' } });
     await app.waitForInit();
     await app.restart();
     await app.waitForInit();
@@ -81,8 +63,8 @@ test.describe('HiDPI UI scale', () => {
     expect((await app.exec(`cat ${DPI_FILE}`, { user: 'root' })).trim()).toBe('96');
   });
 
-  test('a user SELKIES_SCALING_DPI is kept', async () => {
-    app = await AppContainer.start({
+  test('a user SELKIES_SCALING_DPI is kept', async ({ startApp }) => {
+    const app = await startApp({
       label: 'scale-user-dpi',
       env: { CP_UI_SCALE: '2', SELKIES_SCALING_DPI: '144' },
     });
@@ -95,8 +77,8 @@ test.describe('HiDPI UI scale', () => {
 
   // A user's own GDK_SCALE rides along, to prove the launcher leaves it alone when it doesn't
   // apply CP_UI_SCALE (rather than only that nothing set GDK_SCALE).
-  test('an invalid CP_UI_SCALE is logged and ignored, and a user GDK_SCALE passes through', async () => {
-    app = await AppContainer.start({ label: 'scale-bad', env: { CP_UI_SCALE: '1.5', GDK_SCALE: '3' } });
+  test('an invalid CP_UI_SCALE is logged and ignored, and a user GDK_SCALE passes through', async ({ startApp }) => {
+    const app = await startApp({ label: 'scale-bad', env: { CP_UI_SCALE: '1.5', GDK_SCALE: '3' } });
     await app.waitForInit();
     expect(await app.logs()).toContain('[crealityprint-init] ignoring CP_UI_SCALE=1.5');
     // Selkies' own DPI default is left alone.

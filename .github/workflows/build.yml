@@ -37,15 +37,26 @@ env:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    # Tool images run with `docker run` below. The `renovate:` comments let Renovate update them
+    # (custom manager in renovate.json).
+    env:
+      # renovate: datasource=docker depName=rhysd/actionlint
+      ACTIONLINT_VERSION: "1.7.4"
+      # renovate: datasource=docker depName=koalaman/shellcheck
+      SHELLCHECK_VERSION: "v0.10.0"
+      # renovate: datasource=docker depName=hadolint/hadolint
+      HADOLINT_VERSION: "v2.12.0"
+      # renovate: datasource=docker depName=renovate/renovate
+      RENOVATE_VERSION: "41"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: actionlint (workflows)
-        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.4 -color
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:"${ACTIONLINT_VERSION}" -color
 
       - name: shellcheck (shell scripts)
         run: |
-          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:v0.10.0 \
+          docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:"${SHELLCHECK_VERSION}" \
             build/fetch-crealityprint.sh \
             build/patch-selkies.sh \
             tests/smoke.sh \
@@ -65,14 +76,14 @@ jobs:
 
       - name: hadolint (Dockerfiles)
         run: |
-          docker run --rm -i hadolint/hadolint:v2.12.0 < Dockerfile
-          docker run --rm -i hadolint/hadolint:v2.12.0 < tests/e2e/Dockerfile
+          docker run --rm -i hadolint/hadolint:"${HADOLINT_VERSION}" < Dockerfile
+          docker run --rm -i hadolint/hadolint:"${HADOLINT_VERSION}" < tests/e2e/Dockerfile
 
       - name: Renovate config
         run: |
           docker run --rm -v "$PWD:/usr/src/app" -w /usr/src/app \
             --entrypoint renovate-config-validator \
-            renovate/renovate:41 --strict renovate.json
+            renovate/renovate:"${RENOVATE_VERSION}" --strict renovate.json
 
   build:
     runs-on: ubuntu-latest
@@ -87,7 +98,6 @@ jobs:
         run: |
           version="$(sed -n 's/^ARG CREALITYPRINT_VERSION=v//p' Dockerfile)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Image metadata
         id: meta
@@ -99,7 +109,8 @@ jobs:
             type=raw,value=latest
             type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=${{ steps.version.outputs.version }}-r${{ github.run_number }}
-          # These override the Dockerfile labels (and metadata-action's repo-derived defaults).
+          # These override metadata-action's repo-derived defaults; it also adds created, source
+          # and revision. Title, description and licenses repeat the Dockerfile's.
           labels: |
             org.opencontainers.image.title=Creality Print
             org.opencontainers.image.description=Creality Print slicer in the browser via Selkies
@@ -115,9 +126,6 @@ jobs:
           platforms: linux/amd64
           tags: ${{ env.LOCAL_IMAGE }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}-r${{ github.run_number }}
-            BUILD_DATE=${{ steps.version.outputs.build_date }}
           secrets: |
             github_token=${{ secrets.GITHUB_TOKEN }}
           # The weekly run skips the layer cache so the image's own Debian packages (webkit
@@ -197,12 +205,12 @@ jobs:
         if: always()
         with:
           name: e2e-${{ matrix.spec }}
-          # The blob report and the smoke screenshot go in their own artifacts below; don't
+          # The blob report and the app screenshot go in their own artifacts below; don't
           # store them twice.
           path: |
             ${{ runner.temp }}/e2e-artifacts
             !${{ runner.temp }}/e2e-artifacts/blob
-            !${{ runner.temp }}/e2e-artifacts/smoke
+            !${{ runner.temp }}/e2e-artifacts/app-screenshot
           retention-days: 14
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -217,15 +225,16 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
-          name: smoke-${{ matrix.spec }}
-          path: ${{ runner.temp }}/e2e-artifacts/smoke
+          name: app-screenshot-${{ matrix.spec }}
+          path: ${{ runner.temp }}/e2e-artifacts/app-screenshot
           retention-days: 1
           if-no-files-found: ignore
 
   # Merge the per-spec reports into one HTML report (a screenshot of each visible check inline)
-  # and publish it to GitHub Pages: pr-<number>/ for PRs, <branch>/ otherwise, together with the
+  # and publish it to GitHub Pages: pr-<number>/ for PRs, master/ for master, together with the
   # watcher spec's screenshot of the app with a model loaded (for the PR comment). Skipped for
-  # fork PRs (their token can't push) and for the weekly schedule (nothing new to review). Not
+  # fork PRs (their token can't push), for the weekly schedule (nothing new to review) and for
+  # manual runs on other branches (the cleanup workflow would never remove their folders). Not
   # part of ci-ok: publishing shouldn't block.
   #
   # Only the steps that push to gh-pages run here, under the repo-wide gh-pages lock. GitHub keeps
@@ -239,6 +248,7 @@ jobs:
       && github.event_name != 'schedule'
       && needs.e2e.result != 'cancelled'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && (github.event_name == 'pull_request' || github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -248,8 +258,8 @@ jobs:
     outputs:
       published: ${{ steps.published.outputs.published }}
       url: ${{ steps.target.outputs.url }}
-      smoke_found: ${{ steps.smoke.outputs.found }}
-      smoke_caption: ${{ steps.smoke.outputs.caption }}
+      screenshot_found: ${{ steps.screenshot.outputs.found }}
+      screenshot_caption: ${{ steps.screenshot.outputs.caption }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -262,9 +272,9 @@ jobs:
       # Matches nothing when the watcher spec never got to its screenshot; that's not an error.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          pattern: smoke-*
+          pattern: app-screenshot-*
           merge-multiple: true
-          path: ${{ runner.temp }}/smoke
+          path: ${{ runner.temp }}/app-screenshot
 
       # No blobs means the e2e jobs never ran (build failed) or died before reporting.
       - name: Check for test results
@@ -304,7 +314,7 @@ jobs:
           if [ -n "$PR_NUMBER" ]; then
             directory="pr-${PR_NUMBER}"
           else
-            directory="${GITHUB_REF_NAME//\//-}"
+            directory="master"
           fi
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           echo "directory=${directory}" >> "$GITHUB_OUTPUT"
@@ -312,15 +322,15 @@ jobs:
 
       # Publish the app screenshot (the watcher spec's, with a model loaded) next to the report.
       - name: Add the app screenshot to the report
-        id: smoke
+        id: screenshot
         if: steps.blobs.outputs.found == 'true'
         env:
-          SMOKE_DIR: ${{ runner.temp }}/smoke
+          SCREENSHOT_DIR: ${{ runner.temp }}/app-screenshot
           SITE_DIR: ${{ runner.temp }}/site
         run: |
-          if [ -f "${SMOKE_DIR}/smoke.png" ]; then
-            cp "${SMOKE_DIR}/smoke.png" "${SITE_DIR}/smoke.png"
-            caption="$(head -n 1 "${SMOKE_DIR}/caption.txt" 2> /dev/null || true)"
+          if [ -f "${SCREENSHOT_DIR}/app-screenshot.png" ]; then
+            cp "${SCREENSHOT_DIR}/app-screenshot.png" "${SITE_DIR}/app-screenshot.png"
+            caption="$(head -n 1 "${SCREENSHOT_DIR}/caption.txt" 2> /dev/null || true)"
             echo "found=true" >> "$GITHUB_OUTPUT"
             echo "caption=${caption:-Creality Print running in the browser}" >> "$GITHUB_OUTPUT"
           else
@@ -355,6 +365,7 @@ jobs:
       && github.event_name != 'schedule'
       && needs.e2e.result != 'cancelled'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && (github.event_name == 'pull_request' || github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -364,44 +375,44 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       REPORT_URL: ${{ needs.report.outputs.url }}
       PUBLISHED: ${{ needs.report.result == 'success' && needs.report.outputs.published == 'true' }}
-      SMOKE_FOUND: ${{ needs.report.outputs.smoke_found == 'true' }}
+      SCREENSHOT_FOUND: ${{ needs.report.outputs.screenshot_found == 'true' }}
     steps:
       # For tests/wait-for-published-file.sh.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: env.PUBLISHED == 'true' && env.SMOKE_FOUND == 'true'
+        if: env.PUBLISHED == 'true' && env.SCREENSHOT_FOUND == 'true'
 
       # The same screenshot the report job published, to compare with what Pages serves.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        if: env.PUBLISHED == 'true' && env.SMOKE_FOUND == 'true'
+        if: env.PUBLISHED == 'true' && env.SCREENSHOT_FOUND == 'true'
         with:
-          pattern: smoke-*
+          pattern: app-screenshot-*
           merge-multiple: true
-          path: ${{ runner.temp }}/smoke
+          path: ${{ runner.temp }}/app-screenshot
 
       # Pages deploys a minute or so after the push; comment only once it serves this run's
       # screenshot, or GitHub's image proxy picks up the old one. A slow deploy only costs a
       # warning, never the comment; the step timeout backs up the script's own.
       - name: Wait for Pages to serve the app screenshot
         id: wait
-        if: env.PUBLISHED == 'true' && env.SMOKE_FOUND == 'true'
+        if: env.PUBLISHED == 'true' && env.SCREENSHOT_FOUND == 'true'
         continue-on-error: true
         timeout-minutes: 7
         env:
-          SMOKE_FILE: ${{ runner.temp }}/smoke/smoke.png
-        run: tests/wait-for-published-file.sh "${REPORT_URL}smoke.png" "$SMOKE_FILE"
+          SCREENSHOT_FILE: ${{ runner.temp }}/app-screenshot/app-screenshot.png
+        run: tests/wait-for-published-file.sh "${REPORT_URL}app-screenshot.png" "$SCREENSHOT_FILE"
 
       # Embed the image only once Pages serves this run's file: GitHub's image proxy caches what it
       # first fetches, so an early comment would keep showing the old screenshot (or a 404).
       - name: Prepare the app screenshot Markdown
-        id: smoke_markdown
+        id: screenshot_markdown
         if: env.PUBLISHED == 'true'
         env:
-          SCREENSHOT_CAPTION: ${{ needs.report.outputs.smoke_caption }}
+          SCREENSHOT_CAPTION: ${{ needs.report.outputs.screenshot_caption }}
           WAIT_OUTCOME: ${{ steps.wait.outcome }}
         run: |
           # Scoped to this run, so the comment never shows the proxy's cached image of an earlier run.
-          image_url="${REPORT_URL}smoke.png?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          if [ "$SMOKE_FOUND" != "true" ]; then
+          image_url="${REPORT_URL}app-screenshot.png?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [ "$SCREENSHOT_FOUND" != "true" ]; then
             markdown="⚠️ No app screenshot: the watcher spec didn't reach its model-loaded check."
           elif [ "$WAIT_OUTCOME" = "success" ]; then
             alt_text="${SCREENSHOT_CAPTION//[\[\]]/}"
@@ -410,16 +421,16 @@ jobs:
             markdown="⚠️ GitHub Pages didn't deploy in time to embed the app screenshot: [open it](${image_url}) (${SCREENSHOT_CAPTION})."
           fi
           {
-            echo "markdown<<SMOKE_MARKDOWN_EOF"
+            echo "markdown<<SCREENSHOT_MARKDOWN_EOF"
             echo "$markdown"
-            echo "SMOKE_MARKDOWN_EOF"
+            echo "SCREENSHOT_MARKDOWN_EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Job summary
         if: env.PUBLISHED == 'true'
         env:
           E2E_RESULT: ${{ needs.e2e.result }}
-          SMOKE_MARKDOWN: ${{ steps.smoke_markdown.outputs.markdown }}
+          SCREENSHOT_MARKDOWN: ${{ steps.screenshot_markdown.outputs.markdown }}
         run: |
           {
             echo "### e2e report with screenshots"
@@ -427,7 +438,7 @@ jobs:
             echo "Result: **${E2E_RESULT}** for ${COMMIT_SHA}. Report: ${REPORT_URL}"
             echo "(GitHub Pages may need a minute to deploy.)"
             echo
-            echo "$SMOKE_MARKDOWN"
+            echo "$SCREENSHOT_MARKDOWN"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on the PR (report published)
@@ -440,7 +451,7 @@ jobs:
 
             ${{ needs.e2e.result == 'success' && '✅ All e2e specs passed' || '❌ Some e2e specs failed' }} for commit ${{ env.COMMIT_SHA }}.
 
-            ${{ steps.smoke_markdown.outputs.markdown }}
+            ${{ steps.screenshot_markdown.outputs.markdown }}
 
             **[Open the report](${{ env.REPORT_URL }})**: click a test to see a screenshot of each visible check.
 

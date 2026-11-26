@@ -7,8 +7,9 @@
 readonly config_home="/config"
 readonly app_config_root="${config_home}/.config/Creality/Creality Print"
 readonly defaults_dir="/defaults/crealityprint"
-# The Selkies upload folder; the app's Import/Export dialogs are pointed at it on first run.
-readonly upload_dir="${FILE_MANAGER_PATH:-${config_home}/Desktop}"
+# The Selkies upload folder (Selkies reads SELKIES_FILE_MANAGER_PATH before FILE_MANAGER_PATH);
+# the app's Import/Export dialogs are pointed at it on first run.
+readonly upload_dir="${SELKIES_FILE_MANAGER_PATH:-${FILE_MANAGER_PATH:-${config_home}/Desktop}}"
 # Where s6 keeps the environment that services started with with-contenv (Selkies) get. s6
 # rebuilds it from the container's environment on every start, also after `docker restart`.
 readonly env_dir="/run/s6/container_environment"
@@ -30,11 +31,12 @@ readonly owned_state_dirs=(
   "${config_home}/.dbus"
 )
 
-# Print the first path (two levels deep) in the state dirs that abc doesn't own, if any.
-# Two levels, because the base image re-owns the top-level dirs (e.g. /config/.config)
+# Print the first path (two levels deep) in the state dirs whose owner or group isn't abc's, if
+# any. Two levels, because the base image re-owns the top-level dirs (e.g. /config/.config)
 # but not what is inside them.
 first_foreign_owned_path() {
   local expected_uid="$1"
+  local expected_gid="$2"
   local existing_dirs=()
   local state_dir
   for state_dir in "${owned_state_dirs[@]}"; do
@@ -45,22 +47,24 @@ first_foreign_owned_path() {
   if [ "${#existing_dirs[@]}" -eq 0 ]; then
     return
   fi
-  find "${existing_dirs[@]}" -maxdepth 2 ! -uid "$expected_uid" -print -quit 2> /dev/null
+  find "${existing_dirs[@]}" -maxdepth 2 \( ! -uid "$expected_uid" -o ! -gid "$expected_gid" \) \
+    -print -quit 2> /dev/null
 }
 
 # Why: the base image only fixes ownership of the top-level dirs. After a PUID/PGID change
 # the files inside still belong to the old user and the desktop never starts (black screen;
-# docs/research/05, test T3). The upload folder is only re-owned at its top level, so a NAS
+# docs/research/persistence.md). The upload folder is only re-owned at its top level, so a NAS
 # share mounted below it is never chowned.
 repair_ownership() {
-  local expected_uid foreign_path
+  local expected_uid expected_gid foreign_path
   expected_uid="$(id -u abc)"
-  foreign_path="$(first_foreign_owned_path "$expected_uid")"
+  expected_gid="$(id -g abc)"
+  foreign_path="$(first_foreign_owned_path "$expected_uid" "$expected_gid")"
   if [ -z "$foreign_path" ]; then
     return
   fi
 
-  log "${foreign_path} is not owned by uid ${expected_uid}; re-owning the desktop and app state in ${config_home}"
+  log "${foreign_path} is not owned by ${expected_uid}:${expected_gid}; re-owning the desktop and app state in ${config_home}"
   local state_dir
   for state_dir in "${owned_state_dirs[@]}"; do
     if [ -d "$state_dir" ]; then
@@ -113,7 +117,7 @@ seed_first_run() {
   mkdir -p "$data_dir"
   # Declines the "User Experience Improvement Program" (telemetry) dialog.
   cp "${defaults_dir}/privacyInfo.json" "${data_dir}/privacyInfo.json"
-  if ! CP_DESKTOP="$upload_dir" crealityprint-seed-config "$app_version" > "${data_dir}/Creality.conf"; then
+  if ! crealityprint-seed-config "$app_version" > "${data_dir}/Creality.conf"; then
     log "seed generation failed; removing the seed so the app starts clean"
     rm -rf "$data_dir"
   fi
@@ -125,7 +129,7 @@ seed_first_run() {
 # HiDPI browser starts at 200 %. Selkies applies that as labwc's output scale, which stretches
 # this Xwayland app as a bitmap: on top of GDK_SCALE the app would come out 4x and blurry.
 # A server-side DPI of 96 gives every browser the full-resolution desktop at scale 1 instead
-# (docs/research/15 §4). Selkies then ignores the client's choice and hides the setting.
+# (docs/research/hidpi.md). Selkies then ignores the client's choice and hides the setting.
 pin_selkies_dpi() {
   local requested_scale="$1"
   local user_dpi="${SELKIES_SCALING_DPI:-}"

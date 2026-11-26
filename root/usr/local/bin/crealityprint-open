@@ -6,12 +6,12 @@
 #
 # Why: the app always listens on the session D-Bus for "AnotherInstance" (InstanceCheck.cpp),
 # whatever its single_instance setting is. Files sent this way are added to the current plate
-# and unsaved work is kept (docs/research/12, section 1.5).
+# and unsaved work is kept (docs/research/files.md).
 
 set -uo pipefail
 
-# The app runs on Xwayland :0; the session bus is found through X11 autolaunch on that
-# display. The container env says DISPLAY=:1 (X11 mode default), which would fail.
+# The app's Xwayland display, where X11 autolaunch finds its session bus; the container env
+# says :1 (docs/research/base-image.md).
 export DISPLAY=:0
 
 readonly bus_name_prefix="io.github.crealityofficial.CrealityPrint.InstanceCheck.Object"

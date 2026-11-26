@@ -1,31 +1,17 @@
 // File transfer through the Selkies Files panel and its API, including the lock-down options.
 const fs = require('node:fs');
 const path = require('node:path');
-const { test, expect, request } = require('@playwright/test');
-const { AppContainer, writeCubeStl, sha256 } = require('./lib/app');
-const { openSession, openSidebar, uploadViaSidebar, downloadViaFilesDialog } = require('./lib/selkies');
+const { request } = require('@playwright/test');
+const { test, expect } = require('./lib/fixtures');
+const { writeCubeStl, sha256 } = require('./lib/app');
+const { openSession, openSidebar, uploadViaApi, uploadViaSidebar, downloadViaFilesDialog } = require('./lib/selkies');
 const { snap } = require('./lib/evidence');
 
-async function uploadStatus(context, baseUrl, fileName) {
-  const response = await context.post(`${baseUrl}/api/upload`, {
-    headers: { 'Content-Type': 'application/octet-stream', 'X-Upload-Path': fileName },
-    data: Buffer.from('solid empty\nendsolid empty\n'),
-  });
-  return response.status();
-}
+const EMPTY_STL = 'solid empty\nendsolid empty\n';
 
 test.describe('file transfer', () => {
-  let app;
-
-  test.afterEach(async ({}, testInfo) => {
-    if (app) {
-      await app.remove(testInfo);
-      app = null;
-    }
-  });
-
-  test('upload via the sidebar lands in /config/Desktop, and download returns it intact', async ({ page }, testInfo) => {
-    app = await AppContainer.start({ label: 'transfer' });
+  test('upload via the sidebar lands in /config/Desktop, and download returns it intact', async ({ page, startApp }, testInfo) => {
+    const app = await startApp({ label: 'transfer' });
     await app.waitForInit();
     await openSession(page, app.httpsUrl);
 
@@ -46,11 +32,11 @@ test.describe('file transfer', () => {
     expect(sha256(downloadedPath)).toBe(sha256(exportedFile));
   });
 
-  test('SELKIES_FILE_TRANSFERS=none blocks the file API', async ({ page }, testInfo) => {
-    app = await AppContainer.start({ label: 'transfer-none', env: { SELKIES_FILE_TRANSFERS: 'none' } });
+  test('SELKIES_FILE_TRANSFERS=none blocks the file API', async ({ page, startApp }, testInfo) => {
+    const app = await startApp({ label: 'transfer-none', env: { SELKIES_FILE_TRANSFERS: 'none' } });
     await app.waitForInit();
+    expect(await uploadViaApi(app.httpsUrl, 'blocked.stl', EMPTY_STL)).toBe(403);
     const context = await request.newContext({ ignoreHTTPSErrors: true });
-    expect(await uploadStatus(context, app.httpsUrl, 'blocked.stl')).toBe(403);
     const browse = await context.get(`${app.httpsUrl}/api/file-manager/browse?path=`);
     expect(browse.status()).toBe(403);
     await context.dispose();
@@ -61,21 +47,14 @@ test.describe('file transfer', () => {
     await snap(page, testInfo, 'SELKIES_FILE_TRANSFERS=none: the sidebar has no Files section (API answers 403)');
   });
 
-  test('PASSWORD puts basic auth on the file API', async ({ page, browser }, testInfo) => {
-    app = await AppContainer.start({ label: 'transfer-auth', env: { PASSWORD: 'e2e-secret' } });
+  test('PASSWORD puts basic auth on the file API', async ({ page, browser, startApp }, testInfo) => {
+    const app = await startApp({ label: 'transfer-auth', env: { PASSWORD: 'e2e-secret' } });
     await app.waitForInit();
 
-    const anonymous = await request.newContext({ ignoreHTTPSErrors: true });
-    expect(await uploadStatus(anonymous, app.httpsUrl, 'anonymous.stl')).toBe(401);
-    await anonymous.dispose();
-
+    expect(await uploadViaApi(app.httpsUrl, 'anonymous.stl', EMPTY_STL)).toBe(401);
     // Send the credentials up front, as a browser does after the login prompt.
-    const authenticated = await request.newContext({
-      ignoreHTTPSErrors: true,
-      extraHTTPHeaders: { Authorization: `Basic ${Buffer.from('abc:e2e-secret').toString('base64')}` },
-    });
-    expect(await uploadStatus(authenticated, app.httpsUrl, 'authenticated.stl')).toBe(200);
-    await authenticated.dispose();
+    const basicAuth = { Authorization: `Basic ${Buffer.from('abc:e2e-secret').toString('base64')}` };
+    expect(await uploadViaApi(app.httpsUrl, 'authenticated.stl', EMPTY_STL, basicAuth)).toBe(200);
 
     const response = await page.goto(app.httpsUrl);
     expect(response.status()).toBe(401);

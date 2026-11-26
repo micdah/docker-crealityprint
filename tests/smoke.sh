@@ -86,23 +86,8 @@ check_app_stays_up() {
   log "ok: Creality Print still running after 20s"
 }
 
-# Same check as the build-time guard, against the final image: every library resolves.
-check_libraries() {
-  local missing_libraries
-  missing_libraries="$(
-    docker exec "$container_name" bash -c \
-      'LD_LIBRARY_PATH=/opt/crealityprint/bin:/opt/crealityprint/usr/lib ldd /opt/crealityprint/bin/CrealityPrint' \
-      | grep 'not found' \
-      || true
-  )"
-  if [ -n "$missing_libraries" ]; then
-    fail "missing libraries: ${missing_libraries}"
-  fi
-  log "ok: all app libraries resolve"
-}
-
 # vainfo makes the base's init-video pick the i965 driver on Intel Gen9, which streams black
-# (docs/research/04). The Dockerfile purges it; this catches a base that brings it back some
+# (docs/research/gpu.md). The Dockerfile purges it; this catches a base that brings it back some
 # other way. Needs no GPU, so it runs on every CI build.
 check_no_vainfo() {
   if docker exec "$container_name" bash -c 'command -v vainfo' > /dev/null; then
@@ -128,7 +113,6 @@ main() {
   wait_for "HTTPS on port 3001" 60 https_ok
   wait_for "the CrealityPrint process" 120 app_running
   check_app_stays_up
-  check_libraries
   check_no_vainfo
   check_icon
   log "PASS"

@@ -50,6 +50,17 @@ async function poll(description, check, { timeoutMs = 180000, intervalMs = 2000 
   throw new Error(`timed out waiting for ${description}${lastError ? `: ${lastError.message}` : ''}`);
 }
 
+// The app's versioned data dirs (e.g. ".../Creality Print/7.3") under a /config on the host.
+function appDataDirs(configDir) {
+  const root = path.join(configDir, '.config/Creality/Creality Print');
+  if (!fs.existsSync(root)) {
+    return [];
+  }
+  return fs.readdirSync(root)
+    .filter((entry) => /^\d/.test(entry))
+    .map((entry) => path.join(root, entry));
+}
+
 function newConfigDir(label) {
   const dir = path.join(workDir, `${label}-${crypto.randomBytes(3).toString('hex')}`);
   fs.mkdirSync(dir, { recursive: true });
@@ -63,6 +74,7 @@ class AppContainer {
     this.httpsUrl = null;
     // How many times the container has started: waitForInit waits for that many init runs.
     this.starts = 1;
+    this.removed = false;
   }
 
   // Start a container. Options: label, env {}, configDir, devices [], puid/pgid.
@@ -92,7 +104,7 @@ class AppContainer {
     args.push(image);
 
     const app = new AppContainer(name, dir);
-    app.markerBaseline = app.countMainWindowMarkers();
+    app.resetMainWindowBaseline();
     await docker(args);
     await app.readHttpsUrl();
     return app;
@@ -201,25 +213,30 @@ class AppContainer {
     await poll('the CrealityPrint process', async () => (await this.appProcessCount()) > 0);
   }
 
-  // How often the app has logged its printer-manager web view, which it does once the main
-  // window is up. Read from the host side so it also works before the container starts.
-  countMainWindowMarkers() {
-    const appRoot = path.join(this.configDir, '.config/Creality/Creality Print');
-    let count = 0;
-    if (!fs.existsSync(appRoot)) {
-      return count;
-    }
-    for (const versionDir of fs.readdirSync(appRoot)) {
-      const logDir = path.join(appRoot, versionDir, 'log');
+  // The app's log files, read from the host side so this also works while no container runs.
+  appLogContents() {
+    const contents = [];
+    for (const dataDir of appDataDirs(this.configDir)) {
+      const logDir = path.join(dataDir, 'log');
       if (!fs.existsSync(logDir)) {
         continue;
       }
       for (const logFile of fs.readdirSync(logDir)) {
-        const content = fs.readFileSync(path.join(logDir, logFile), 'utf8');
-        count += content.split('PrinterMgrView').length - 1;
+        contents.push(fs.readFileSync(path.join(logDir, logFile), 'utf8'));
       }
     }
-    return count;
+    return contents;
+  }
+
+  // How often the app has logged its printer-manager web view, which it does once the main
+  // window is up.
+  countMainWindowMarkers() {
+    return this.appLogContents().reduce((count, content) => count + content.split('PrinterMgrView').length - 1, 0);
+  }
+
+  // Count only markers from now on, e.g. before the app is started again on the same /config.
+  resetMainWindowBaseline() {
+    this.markerBaseline = this.countMainWindowMarkers();
   }
 
   // Wait for a *new* marker: a reused /config already holds markers from earlier runs.
@@ -232,22 +249,7 @@ class AppContainer {
 
   // Whether the app's own log (not docker logs) contains text: proof the app itself acted.
   appLogIncludes(text) {
-    const appRoot = path.join(this.configDir, '.config/Creality/Creality Print');
-    if (!fs.existsSync(appRoot)) {
-      return false;
-    }
-    for (const versionDir of fs.readdirSync(appRoot)) {
-      const logDir = path.join(appRoot, versionDir, 'log');
-      if (!fs.existsSync(logDir)) {
-        continue;
-      }
-      for (const logFile of fs.readdirSync(logDir)) {
-        if (fs.readFileSync(path.join(logDir, logFile), 'utf8').includes(text)) {
-          return true;
-        }
-      }
-    }
-    return false;
+    return this.appLogContents().some((content) => content.includes(text));
   }
 
   async waitForAppLog(text, timeoutMs = 30000) {
@@ -273,12 +275,16 @@ class AppContainer {
     await docker(['stop', '--time', '30', this.name], { allowFailure: true });
   }
 
-  // Attach logs to the test report, then remove the container.
+  // Attach logs to the test report, then remove the container. Removing twice is a no-op.
   async remove(testInfo) {
+    if (this.removed) {
+      return;
+    }
     if (testInfo) {
       await this.attachDiagnostics(testInfo);
     }
     await docker(['rm', '--force', '--volumes', this.name], { allowFailure: true });
+    this.removed = true;
   }
 
   async attachDiagnostics(testInfo) {
@@ -317,4 +323,4 @@ function sha256(filePath) {
   return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
-module.exports = { AppContainer, newConfigDir, poll, writeCubeStl, sha256, docker, hostUid, hostGid, workDir };
+module.exports = { AppContainer, appDataDirs, poll, writeCubeStl, sha256 };

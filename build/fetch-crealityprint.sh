@@ -5,7 +5,7 @@
 #
 # Why a script instead of inline RUN commands: Creality's release assets change naming often
 # (several AppImages per release, renamed patterns), so asset selection needs real checks that
-# fail loudly instead of silently picking the wrong file. See docs/research/09, risk R3.
+# fail loudly instead of silently picking the wrong file. See docs/research/decisions.md.
 
 set -euo pipefail
 
@@ -64,12 +64,13 @@ download_and_verify() {
   local expected_digest="$2"
   local appimage_path="$3"
 
-  log "downloading ${download_url}"
-  curl -fsSL -o "$appimage_path" "$download_url"
-
   if [ -z "$expected_digest" ]; then
     fail "the release asset has no sha256 digest to verify against"
   fi
+
+  log "downloading ${download_url}"
+  curl -fsSL -o "$appimage_path" "$download_url"
+
   local actual_digest
   actual_digest="sha256:$(sha256sum "$appimage_path" | cut -d' ' -f1)"
   if [ "$actual_digest" != "$expected_digest" ]; then
@@ -90,9 +91,6 @@ extract_appimage() {
 
   # The extracted directories come out as 0700, which the non-root app user can't read.
   find "$install_dir" -type d -exec chmod 755 {} +
-
-  # Belt and braces with /usr/local/bin/crealityprint: the GTK UI needs the X11 backend.
-  sed -i "1a export GDK_BACKEND=x11" "$install_dir/AppRun"
 }
 
 # Fail the build when the base image lacks a library the app links against.

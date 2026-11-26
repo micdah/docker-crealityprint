@@ -1,17 +1,7 @@
 // Helpers for driving the Selkies web client (Selkies 2.2.x frontend).
 
 const path = require('node:path');
-
-async function expectEventually(check, description, timeoutMs = 15000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await check()) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`timed out waiting for ${description}`);
-}
+const { poll } = require('./app');
 
 // Open the session and wait until the stream element is on the page.
 async function openSession(page, url) {
@@ -33,21 +23,22 @@ async function openSidebar(page) {
   const firstHeader = page.locator('button.sidebar-section-header').first();
   if (!(await isInViewport(page, firstHeader))) {
     await page.locator('.toggle-handle').click();
-    await expectEventually(() => isInViewport(page, firstHeader), 'the sidebar to open');
+    await poll('the sidebar to open', () => isInViewport(page, firstHeader), { timeoutMs: 15000, intervalMs: 250 });
   }
 }
 
-async function openFilesSection(page) {
-  const filesHeader = page.locator('button.sidebar-section-header[title="Files"]');
+// Open the sidebar and expand one of its sections, e.g. "Files" or "Clipboard".
+async function openSidebarSection(page, title) {
+  const header = page.locator(`button.sidebar-section-header[title="${title}"]`);
   await openSidebar(page);
-  if ((await filesHeader.getAttribute('aria-expanded')) !== 'true') {
-    await filesHeader.click();
+  if ((await header.getAttribute('aria-expanded')) !== 'true') {
+    await header.click();
   }
 }
 
 // Upload through the sidebar's "Upload Files" button (opens the browser's file chooser).
 async function uploadViaSidebar(page, filePath) {
-  await openFilesSection(page);
+  await openSidebarSection(page, 'Files');
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
     page.locator('button[title="Upload Files"]').click(),
@@ -60,7 +51,7 @@ async function uploadViaSidebar(page, filePath) {
 // Download one file through the sidebar's "Download Files" dialog; returns the Download.
 // onDialogOpen (optional) runs once the file is listed, e.g. to take a screenshot.
 async function downloadViaFilesDialog(page, fileName, onDialogOpen = async () => {}) {
-  await openFilesSection(page);
+  await openSidebarSection(page, 'Files');
   await page.locator('button[title="Download Files"]').click();
   // Rows are plain divs: take the closest ancestor of the file name that holds a button.
   const dialog = page.getByRole('dialog');
@@ -94,4 +85,12 @@ async function uploadViaApi(baseUrl, fileName, body, extraHeaders = {}) {
   return status;
 }
 
-module.exports = { uploadViaApi, openSidebar, openSession, openFilesSection, uploadViaSidebar, downloadViaFilesDialog, focusStream };
+module.exports = {
+  uploadViaApi,
+  openSidebar,
+  openSidebarSection,
+  openSession,
+  uploadViaSidebar,
+  downloadViaFilesDialog,
+  focusStream,
+};

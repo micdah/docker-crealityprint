@@ -36,6 +36,7 @@ services:
       - /dev/dri:/dev/dri                 # Intel/AMD GPU; remove this line for CPU-only hosts
     shm_size: "1gb"
     # Bridge networking works for printers added by IP (status, upload, camera).
-    # Automatic printer discovery needs host networking plus a firewall rule for mDNS:
+    # Automatic printer discovery needs host networking plus a firewall rule for mDNS
+    # (unverified; linuxserver calls host networking "may work, not supported"):
     # network_mode: host
     restart: unless-stopped
