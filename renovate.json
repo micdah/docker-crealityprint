@@ -3,6 +3,7 @@
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
   "baseBranchPatterns": ["master"],
   "automerge": false,
+  "assignees": ["micdah"],
   "ignorePaths": ["**/node_modules/**"],
   "customManagers": [
     {
