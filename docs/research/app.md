@@ -3,11 +3,11 @@
 What the Creality Print application is, how the image installs and starts it, and how it behaves inside a container. The data directory is in [persistence.md](persistence.md), GPU and OpenGL in [gpu.md](gpu.md), printers in [printers.md](printers.md), the upload watcher in [files.md](files.md). Why the image does what it does is in [decisions.md](decisions.md).
 
 Tags: **[V]** verified (seen in source, or tested with this image or its research builds), **[I]** inferred.
-Verified against: Creality Print 7.3.1 and 7.3.2 source and AppImages.
+Verified against: Creality Print 7.3.1, 7.3.2 and 7.3.3 source and AppImages.
 
 - Creality Print is an AGPL-3.0 fork of OrcaSlicer: a wxWidgets/GTK3 desktop app with an OpenGL 3D view and many embedded WebKitGTK pages.
 - Linux ships as one x86_64 AppImage per release, built on Ubuntu 24.04. It needs glibc 2.38 or newer, webkit2gtk-4.1 and libsoup-3 from the host [V].
-- The image downloads the release named in `ARG CREALITYPRINT_VERSION` (now `v7.3.2`), checks its sha256, extracts it unmodified to `/opt/crealityprint` and makes its directories 0755. On the base image, `libwebkit2gtk-4.1-0` is the only package the app needs [V].
+- The image downloads the release named in `ARG CREALITYPRINT_VERSION` (now `v7.3.3`), checks its sha256, extracts it unmodified to `/opt/crealityprint` and makes its directories 0755. On the base image, `libwebkit2gtk-4.1-0` is the only package the app needs [V].
 - The app runs as `abc` on Xwayland `:0`. It is started by `/usr/local/bin/crealityprint`, which sets `GDK_BACKEND=x11` and runs `AppRun`.
 - Every running instance listens on the session D-Bus for files from a second instance. The image uses this to add uploads to the open plate without starting a second app [V].
 
@@ -21,11 +21,12 @@ Verified against: Creality Print 7.3.1 and 7.3.2 source and AppImages.
 
 ## Releases and assets
 
-As of 2026-11-21 [V, GitHub releases API]:
+As of 2026-11-26 [V, GitHub releases API]:
 
 | Release | Published | GitHub prerelease | Linux x86_64 AppImages |
 |---|---|---|---|
-| v7.3.2 | 2026-11-13 | **true** | `CrealityPrint-V7.3.2.6412-x86_64-Release.AppImage` |
+| v7.3.3 | 2026-11-25 | **true** | `CrealityPrint-V7.3.3.6461-x86_64-Release.AppImage` |
+| v7.3.2 | 2026-11-13 | false (true until v7.3.3 came out) | `CrealityPrint-V7.3.2.6412-x86_64-Release.AppImage` |
 | v7.3.1 | 2026-10-31 | false | `CrealityPrint-V7.3.1.6378-x86_64-Release.AppImage` (191,511,032 bytes) |
 | v7.3.0 | 2026-09-24 | false | three re-spins: builds 6149, 6151 and 6157 |
 | v7.2.1, v7.1.1 | 2026-08-04, 2026-04-28 | false | one generic AppImage |
@@ -37,7 +38,7 @@ As of 2026-11-21 [V, GitHub releases API]:
 
 - **The naming changes often.** The generic `CrealityPrint-V<version>.<build>-x86_64-Release.AppImage` is the Ubuntu 24.04 build: Creality's Jenkins Linux stage runs on an `ubuntu24.04` agent [V, source].
 - **The tag doesn't give the file name.** The 4th version part (`6378`) is a commit count on Creality's internal repo, so the download URL can't be built from the tag alone [V].
-- **The GitHub prerelease flag is unreliable.** Old `-Beta` tags are not flagged, and v7.3.2 is flagged while creality.com offers it as the current download for Windows, macOS and Linux [V]. That is why the image tracks every plain `vX.Y.Z` tag (see [decisions.md](decisions.md)).
+- **The GitHub prerelease flag is unreliable.** Old `-Beta` tags are not flagged. v7.3.2 was flagged while creality.com offered it as the current download for Windows, macOS and Linux, and lost the flag when v7.3.3 came out flagged in its place [V]. That is why the image tracks every plain `vX.Y.Z` tag (see [decisions.md](decisions.md)).
 - **Other formats.** Most releases also carry an x86_64 flatpak (runtime `org.gnome.Platform` 50). aarch64 exists only as a flatpak for v6.2.1, v7.2.0 and v7.3.0. There is no `.deb` and no Flathub package. The `.nupkg` files are for the Windows updater [V].
 - **creality.com** renders its download page with JavaScript and has no static download URLs [V]. GitHub releases, with the asset `digest` as checksum, are the only download source the image uses.
 
@@ -53,7 +54,7 @@ As of 2026-11-21 [V, GitHub releases API]:
 6. Runs `ldd` on `bin/CrealityPrint` with the library path `AppRun` uses, and fails if any library is `not found`.
 7. Copies the app's `CrealityPrint.png` to `/usr/share/selkies/www/icon.png` (the Selkies favicon and PWA icon), and writes the tag and URL to `/build_version`.
 
-The `Dockerfile` pins `ARG CREALITYPRINT_VERSION=v7.3.2`. Renovate proposes each new plain `vX.Y.Z` release, prereleases included, as its own PR. The CI smoke test checks that the `CrealityPrint` process starts as `abc` and stays up [V, code].
+The `Dockerfile` pins `ARG CREALITYPRINT_VERSION=v7.3.3`. Renovate proposes each new plain `vX.Y.Z` release, prereleases included, as its own PR. The CI smoke test checks that the `CrealityPrint` process starts as `abc` and stays up [V, code].
 
 ## Inside the AppImage
 
