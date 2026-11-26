@@ -10,7 +10,7 @@ ARG BASE_IMAGE=ghcr.io/linuxserver/baseimage-selkies:debiantrixie@sha256:793fc36
 FROM ${BASE_IMAGE}
 
 # renovate: datasource=github-releases depName=CrealityOfficial/CrealityPrint
-ARG CREALITYPRINT_VERSION=v7.3.2
+ARG CREALITYPRINT_VERSION=v7.3.3
 
 # CI overrides title, description and licenses, and adds version, created, source and revision.
 LABEL org.opencontainers.image.title="Creality Print" \

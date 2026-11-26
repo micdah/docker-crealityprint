@@ -201,7 +201,7 @@ One-time setup: after the first run has created the `gh-pages` branch, enable Pa
 
 After the first publish, the GHCR package is private: make it public in the package settings if others should pull it.
 
-**Updates:** install the free [Renovate GitHub App](https://github.com/apps/renovate) on the repository. It opens:
+**Updates:** install the free [Renovate GitHub App](https://github.com/apps/renovate) on the repository. It assigns every PR to `micdah`, so each one sends a notification, and opens:
 - a PR for each Creality Print release, as soon as it appears (label `crealityprint-update`);
 - a weekly PR for the base-image digest (label `base-image-update`), so a bump that fails the build doesn't hold up the rest;
 - one weekly "tooling updates" PR for GitHub Actions, Playwright, the Docker CLI and the lint tools.
