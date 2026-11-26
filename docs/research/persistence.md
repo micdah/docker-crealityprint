@@ -141,7 +141,7 @@ CI (`persistence.spec.js`) restarts an existing `/config` with `PUID`/`PGID` 432
 `init-crealityprint-config` runs as root after the base's `init-config` and before `init-config-end`, so before the desktop starts [V, code].
 
 - **When:** only if no `Creality Print/<digit…>/` dir exists. Any existing data dir means the user has settings, or the app has a migration to run, and a seeded `Creality.conf` would make the app treat `7.3/` as initialised and skip that import [V, source].
-- **Where:** the full app version is parsed from the asset name in `/build_version` (e.g. `7.3.2.6412`); the data dir is `<major>.<minor>`. If the version can't be read, the init logs it and seeds nothing.
+- **Where:** the full app version is parsed from the asset name in `/build_version` (e.g. `7.3.3.6461`); the data dir is `<major>.<minor>`. If the version can't be read, the init logs it and seeds nothing.
 - **`privacyInfo.json`**, copied from `/defaults/crealityprint/`: `{"list":[{"check":false,"version":"7.3.0.0"}]}`. It answers the "User Experience Improvement Program" (telemetry) prompt with Cancel. `check` is the user's answer, so never ship `true`. Any 7.x version matches, and the app rewrites it to the exact version [V].
 - **`Creality.conf`**, printed by `crealityprint-seed-config <version>`:
   - Always: `app.version`, plus `app.last_export_path` and `recent.last_opened_folder` set to the upload folder (`SELKIES_FILE_MANAGER_PATH`, else `FILE_MANAGER_PATH`, default `/config/Desktop`). The app's own setup wizard still runs.
@@ -150,11 +150,11 @@ CI (`persistence.spec.js`) restarts an existing `/config` with `PUID`/`PGID` 432
 - If generation fails, the seeded dir is removed so the app starts clean. Either way `/config/.config/Creality` is re-owned to `abc`.
 - Later starts never touch `Creality.conf`. `CP_*` and a changed upload folder affect only a fresh volume.
 
-`CP_PRINTER="Creality K1C"` on 7.3.2 gives (checked by `seed.spec.js`, which also covers the plain and the unknown-printer seed) [V]:
+`CP_PRINTER="Creality K1C"` on 7.3.3 gives (checked by `seed.spec.js`, which also covers the plain and the unknown-printer seed) [V]:
 
 ```json
 {
-  "app": { "version": "7.3.2.6412", "last_export_path": "/config/Desktop",
+  "app": { "version": "7.3.3.6461", "last_export_path": "/config/Desktop",
            "region": "Europe", "is_first_install": "1" },
   "recent": { "last_opened_folder": "/config/Desktop" },
   "firstguide": { "finish": "1" },
