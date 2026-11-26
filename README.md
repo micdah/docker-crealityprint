@@ -206,6 +206,8 @@ After the first publish, the GHCR package is private: make it public in the pack
 - a weekly PR for the base-image digest (label `base-image-update`), so a bump that fails the build doesn't hold up the rest;
 - one weekly "tooling updates" PR for GitHub Actions, Playwright, the Docker CLI and the lint tools.
 
+To review a Creality Print update PR, run the Claude Code skill `crealityprint-update` (`.claude/skills/crealityprint-update/`). It checks the release and the upstream source diff against what the image relies on, waits for CI, and lists the docs to update.
+
 ## License
 
 The image's own files are provided as-is. Creality Print is © Creality and licensed under [AGPL-3.0](https://github.com/CrealityOfficial/CrealityPrint/blob/master/LICENSE.txt). The image ships the unmodified official AppImage, and the exact upstream release is recorded in the image label `crealityprint.upstream`. Selkies is © the Selkies Project and licensed under MPL-2.0; the image patches one of its files, with the patch in [`build/patches/`](build/patches/).

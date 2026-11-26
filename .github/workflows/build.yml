@@ -59,6 +59,7 @@ jobs:
           docker run --rm -v "$PWD:/mnt" -w /mnt koalaman/shellcheck:"${SHELLCHECK_VERSION}" \
             build/fetch-crealityprint.sh \
             build/patch-selkies.sh \
+            .claude/skills/crealityprint-update/gather.sh \
             tests/smoke.sh \
             tests/run-e2e.sh \
             tests/e2e-summary.sh \
